@@ -43,6 +43,8 @@ pub struct Wheel {
     pub info_t: f32,
     last_sel: usize,
     pub changed_at: f32,
+    /// Direction of the last step (+1 next, -1 previous), for slide transitions.
+    pub last_dir: i64,
 }
 
 fn modi(a: i64, n: i64) -> i64 {
@@ -57,7 +59,7 @@ fn ease_out(t: f32) -> f32 {
 
 impl Wheel {
     pub fn new(n: usize, start: usize) -> Self {
-        Wheel { target: start as i64, pos: start as f32, n: n.max(1) as i64, info_t: 1.0, last_sel: start, changed_at: 0.0 }
+        Wheel { target: start as i64, pos: start as f32, n: n.max(1) as i64, info_t: 1.0, last_sel: start, changed_at: 0.0, last_dir: 1 }
     }
 
     pub fn selected(&self) -> usize {
@@ -65,6 +67,9 @@ impl Wheel {
     }
 
     pub fn step(&mut self, d: i64) {
+        if d != 0 {
+            self.last_dir = d.signum();
+        }
         self.target += d;
         // Keep the spring from replaying a long spin if many steps queue up.
         self.pos = self.pos.clamp(self.target as f32 - 6.0, self.target as f32 + 6.0);

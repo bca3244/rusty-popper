@@ -12,6 +12,7 @@ mod assets;
 mod input;
 mod mpv;
 mod settings;
+mod video;
 mod wheel;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -296,6 +297,10 @@ struct ScreenOut {
     window: Window,
     surface: Surface<WindowSurface>,
     player: mpv::Player,
+    /// Offscreen texture mpv renders into (None if it couldn't be created:
+    /// then mpv draws straight to the window and there's no slide).
+    target: Option<video::Target>,
+    slide: Option<video::Slide>,
 }
 
 impl ScreenOut {
@@ -315,6 +320,7 @@ impl ScreenOut {
 struct Gfx {
     outs: Vec<ScreenOut>, // the playfield is outs[0]
     context: PossiblyCurrentContext,
+    gl: glow::Context,
     _loader: Box<mpv::GetProcAddress>,
     canvas: Canvas<OpenGl>,
     fonts: wheel::Fonts,
@@ -509,7 +515,7 @@ impl App {
             let mut player = self.mpv.player(&opts).with_context(|| format!("{:?}", screen.slot))?;
             player.init_gl(&loader)?;
             window.set_cursor_visible(false);
-            let out = ScreenOut { screen, window, surface, player };
+            let out = ScreenOut { screen, window, surface, player, target: None, slide: None };
             out.show(start_item.media(out.screen.slot).as_deref());
             outs.push(out);
         }
@@ -539,11 +545,22 @@ impl App {
         });
         let logos = assets::spawn_loader(self.items.iter().map(|i| i.wheel_png.clone()).collect(), order);
 
+        // Offscreen video targets (one context, so textures work on every surface).
+        let gl = unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s) as *const c_void) };
+        for o in outs.iter_mut() {
+            context.make_current(&o.surface)?;
+            match video::Target::new(&gl, &mut canvas, o.screen.width, o.screen.height) {
+                Ok(t) => o.target = Some(t),
+                Err(e) => eprintln!("{:?}: no offscreen video ({e:#}); slides disabled", o.screen.slot),
+            }
+        }
+        context.make_current(&outs[0].surface)?;
         outs[0].window.focus_window();
         let now = Instant::now();
         self.gfx = Some(Gfx {
             outs,
             context,
+            gl,
             _loader: loader,
             canvas,
             fonts,
@@ -915,39 +932,81 @@ impl App {
             g.shown = sel;
             g.swapped_at = now;
             let item = &self.items[sel];
-            for o in &g.outs {
-                o.show(item.media(o.screen.slot).as_deref());
+            let slide = style == WheelStyle::Flow;
+            let dir = g.wheel.last_dir;
+            for o in g.outs.iter_mut() {
+                let media = item.media(o.screen.slot);
+                // Cover flow: freeze the outgoing frame and slide it away once
+                // the new video has a frame.
+                if slide && media.is_some() {
+                    if let Some(t) = &o.target {
+                        g.context.make_current(&o.surface)?;
+                        t.freeze(&g.gl);
+                        o.slide = Some(video::Slide::new(dir));
+                    }
+                }
+                o.show(media.as_deref());
             }
         }
-        for o in &g.outs {
-            if o.player.poll_events().contains(&mpv::EVENT_SHUTDOWN) {
+        for o in g.outs.iter_mut() {
+            let events = o.player.poll_events();
+            if events.contains(&mpv::EVENT_SHUTDOWN) {
                 el.exit();
+            }
+            if events.contains(&mpv::EVENT_PLAYBACK_RESTART) {
+                if let Some(s) = o.slide.as_mut() {
+                    s.video_ready();
+                }
             }
         }
 
-        // Secondary screens: video only.
-        for o in g.outs.iter().skip(1) {
+        // Pass 1: every screen's video into its offscreen texture (all mpv work
+        // first, with GL state reset, since femtovg's state upsets mpv).
+        for o in &g.outs {
             g.context.make_current(&o.surface)?;
-            o.player.render(o.screen.width, o.screen.height);
+            video::reset_for_mpv(&g.gl);
+            match &o.target {
+                Some(t) => o.player.render_to(t.fbo_id(), o.screen.width, o.screen.height),
+                None => o.player.render(o.screen.width, o.screen.height),
+            }
+        }
+        // Pass 2: composite. The slide runs along the player's left/right: on
+        // the playfield that's the menu's rotated x axis, elsewhere screen x.
+        let pf_rot = (g.outs[0].screen.rotation + self.ui_rotation).rem_euclid(360);
+        for o in g.outs.iter_mut().skip(1) {
+            g.context.make_current(&o.surface)?;
+            if let Some(t) = &o.target {
+                g.canvas.set_size(o.screen.width as u32, o.screen.height as u32, 1.0);
+                let a = (o.screen.rotation as f32).to_radians();
+                video::composite(&mut g.canvas, t, &mut o.slide, (a.cos(), a.sin()));
+                g.canvas.flush();
+            }
             o.surface.swap_buffers(&g.context)?;
         }
         // Playfield: video, then the wheel on top, then present (waits for vsync).
-        let pf = &g.outs[0];
-        g.context.make_current(&pf.surface)?;
-        let (w, h) = (pf.screen.width, pf.screen.height);
-        pf.player.render(w, h);
+        let (w, h) = (g.outs[0].screen.width, g.outs[0].screen.height);
+        g.context.make_current(&g.outs[0].surface)?;
         g.canvas.set_size(w as u32, h as u32, 1.0);
+        {
+            let pf = &mut g.outs[0];
+            if let Some(t) = &pf.target {
+                let a = (pf_rot as f32).to_radians();
+                video::composite(&mut g.canvas, t, &mut pf.slide, (a.cos(), a.sin()));
+            }
+        }
+        let pf = &g.outs[0];
         g.canvas.save();
         // Draw in the frame the player sees: on a cabinet the playfield is
         // usually mounted turned, so the menu is rotated to face them.
-        let rot = (pf.screen.rotation + self.ui_rotation).rem_euclid(360);
+        let rot = pf_rot;
         let (lw, lh) = if rot % 180 == 0 { (w, h) } else { (h, w) };
         if rot != 0 {
             g.canvas.translate(w as f32 / 2.0, h as f32 / 2.0);
             g.canvas.rotate((rot as f32).to_radians());
             g.canvas.translate(-(lw as f32) / 2.0, -(lh as f32) / 2.0);
         }
-        let fade = if g.shown == sel { ((now - g.swapped_at) / wheel::MEDIA_FADE).min(1.0) } else { 1.0 };
+        // Arc fades the new video in from black; cover flow slides it instead.
+        let fade = if style == WheelStyle::Flow { 1.0 } else if g.shown == sel { ((now - g.swapped_at) / wheel::MEDIA_FADE).min(1.0) } else { 1.0 };
         let playlist_name = match self.playlist {
             0 => "All games",
             n => self.playlists[n - 1].name.as_str(),
@@ -1060,6 +1119,7 @@ impl App {
         let black = |o: &ScreenOut| phase == rp_launch::Phase::Playing && !keep.contains(&(o.screen.slot as u32));
         for o in g.outs.iter().skip(1).filter(|o| !black(o)) {
             g.context.make_current(&o.surface)?;
+            video::reset_for_mpv(&g.gl);
             o.player.render(o.screen.width, o.screen.height);
             o.surface.swap_buffers(&g.context)?;
         }
@@ -1095,6 +1155,9 @@ impl App {
             for o in g.outs.iter_mut() {
                 if g.context.make_current(&o.surface).is_ok() {
                     o.player.free_gl();
+                    if let Some(t) = &o.target {
+                        t.delete(&g.gl);
+                    }
                 }
             }
         }

@@ -46,6 +46,8 @@ const RENDER_PARAM_OPENGL_FBO: c_int = 3;
 const RENDER_PARAM_FLIP_Y: c_int = 4;
 
 pub const EVENT_SHUTDOWN: i32 = 1;
+/// Playback (re)started after loading or seeking: the new file has frames.
+pub const EVENT_PLAYBACK_RESTART: i32 = 21;
 
 struct Api {
     _lib: Library,
@@ -162,11 +164,18 @@ impl Player {
     /// Draws the current video frame into framebuffer 0. The GL context for
     /// this screen must be current.
     pub fn render(&self, w: i32, h: i32) {
+        self.render_to(0, w, h);
+    }
+
+    /// Draws the current video frame into framebuffer object `fbo` (0 = the window).
+    pub fn render_to(&self, fbo: i32, w: i32, h: i32) {
         if self.render.is_null() {
             return;
         }
-        let mut fbo = OpenGlFbo { fbo: 0, w, h, internal_format: 0 };
-        let mut flip: c_int = 1;
+        // The window (fbo 0) has a bottom-left origin, so mpv flips for it; a
+        // texture we sample with femtovg wants the unflipped image.
+        let mut flip: c_int = if fbo == 0 { 1 } else { 0 };
+        let mut fbo = OpenGlFbo { fbo, w, h, internal_format: 0 };
         let mut params = [
             RenderParam { kind: RENDER_PARAM_OPENGL_FBO, data: &mut fbo as *mut _ as *mut c_void },
             RenderParam { kind: RENDER_PARAM_FLIP_Y, data: &mut flip as *mut _ as *mut c_void },
