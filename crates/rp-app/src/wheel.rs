@@ -217,7 +217,11 @@ fn visible_items(pos: f32, n: usize, range: f32) -> Vec<(usize, f32)> {
 }
 
 fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
-    let (r, step, cx, sy) = (1500.0f32, 0.205f32, vw / 2.0, dh - 240.0);
+    // A narrow (portrait) screen packs the arc tighter and the logos smaller
+    // so two neighbors fit on each side of the selection.
+    let narrow = vw < DESIGN_W * 0.75;
+    let (step, base_w, base_h) = if narrow { (0.145f32, 180.0f32, 150.0f32) } else { (0.205, 240.0, 190.0) };
+    let (r, cx, sy) = (1500.0f32, vw / 2.0, dh - 240.0);
     let cy = sy + r;
     let sel = &f.entries[f.wheel.selected()];
 
@@ -237,7 +241,7 @@ fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
         let (x, y) = (cx + r * ang.sin(), cy - r * ang.cos());
         let sc = 1.0 + 0.62 * (1.0 - ad).max(0.0);
         let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
-        let (w, h) = fit(aspect, 240.0 * sc, 190.0 * sc);
+        let (w, h) = fit(aspect, base_w * sc, base_h * sc);
         let alpha = clamp(1.25 - ad * 0.22, 0.0, 1.0) * if ad < 0.5 { 1.0 } else { 0.82 };
         cv.save();
         cv.translate(x, y);
@@ -321,6 +325,22 @@ fn reflection(cv: &mut Cv, img: ImageId, x: f32, top: f32, w: f32, h: f32, alpha
     cv.restore();
 }
 
+/// Splits a title into two lines at the space nearest the middle, preferring
+/// to break before a "(Maker Year)" suffix.
+fn split_title(t: &str) -> (String, String) {
+    if let Some(i) = t.rfind(" (") {
+        if i > t.len() / 3 {
+            return (t[..i].to_string(), t[i + 1..].to_string());
+        }
+    }
+    let mid = t.len() / 2;
+    let best = t.match_indices(' ').map(|(i, _)| i).min_by_key(|i| (*i as i64 - mid as i64).abs());
+    match best {
+        Some(i) => (t[..i].to_string(), t[i + 1..].to_string()),
+        None => (t.to_string(), String::new()),
+    }
+}
+
 fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     let idx = f.wheel.selected();
     let e = &f.entries[idx];
@@ -335,14 +355,31 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     if !e.subtitle.is_empty() {
         let _ = cv.fill_text(x + off, y, &e.subtitle, &text(f.fonts.mono, 26.0, hue_color(hue, 0.9, 0.72, a), Align::Left));
     }
-    // Title with a soft dark shadow, shrunk to fit long names.
+    // Title with a soft dark shadow. Long names shrink, then wrap to two lines.
     let max_w = vw - 2.0 * x;
     let probe = text(f.fonts.display, 92.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), Align::Left);
-    let tw = cv.measure_text(0.0, 0.0, &e.title, &probe).map(|m| m.width()).unwrap_or(0.0);
-    let size = if tw > max_w { (92.0 * max_w / tw).max(40.0) } else { 92.0 };
-    let title_shadow = text(f.fonts.display, size, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
-    let _ = cv.fill_text(x + off * 1.6 + 3.0, y + 95.0, &e.title, &title_shadow);
-    let _ = cv.fill_text(x + off * 1.6, y + 92.0, &e.title, &text(f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
+    let width_at_92 = |cv: &Cv, s: &str| cv.measure_text(0.0, 0.0, s, &probe).map(|m| m.width()).unwrap_or(0.0);
+    let tw = width_at_92(cv, &e.title);
+    let (lines, size): (Vec<String>, f32) = if tw <= max_w {
+        (vec![e.title.clone()], 92.0)
+    } else if 92.0 * max_w / tw >= 64.0 {
+        (vec![e.title.clone()], 92.0 * max_w / tw)
+    } else {
+        let (l1, l2) = split_title(&e.title);
+        let widest = width_at_92(cv, &l1).max(width_at_92(cv, &l2)).max(1.0);
+        let size = (92.0 * max_w / widest).min(80.0);
+        (vec![l1, l2], size)
+    };
+    let line_h = size * 1.05;
+    let mut ty = y + size; // first baseline sits one title line below the subtitle
+    for line in &lines {
+        let shadow = text(f.fonts.display, size, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
+        let _ = cv.fill_text(x + off * 1.6 + 3.0, ty + 3.0, line, &shadow);
+        let _ = cv.fill_text(x + off * 1.6, ty, line, &text(f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
+        ty += line_h;
+    }
+    // Chips sit below the last title line.
+    let chip_top = ty - line_h + 28.0;
 
     let mut chip_x = x + off * 2.0;
     for chip in &e.chips {
@@ -350,10 +387,10 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
         let tw = cv.measure_text(0.0, 0.0, chip, &paint).map(|m| m.width()).unwrap_or(100.0);
         let w = tw + 32.0;
         let mut p = Path::new();
-        p.rounded_rect(chip_x, y + 120.0, w, 42.0, 21.0);
+        p.rounded_rect(chip_x, chip_top, w, 42.0, 21.0);
         cv.fill_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.08 * a)));
         cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.18 * a)).with_line_width(1.5));
-        let _ = cv.fill_text(chip_x + 16.0, y + 149.0, chip, &paint);
+        let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
         chip_x += w + 12.0;
     }
     let counter = format!("{:02} / {}", idx + 1, f.entries.len());
