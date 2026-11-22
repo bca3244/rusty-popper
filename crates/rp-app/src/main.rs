@@ -120,10 +120,8 @@ impl Item {
             (None, Some(y)) => y.to_string(),
             (None, None) => String::new(),
         };
-        let mut chips = Vec::new();
-        if let Some(p) = g.players.filter(|p| *p > 0) {
-            chips.push(format!("{p} {}", if p == 1 { "player" } else { "players" }));
-        }
+        // Popper's tags (VR, nFozzy, Fleep...), then the emulator.
+        let mut chips: Vec<String> = g.tags.clone();
         chips.push(self.emu_name.clone());
         wheel::Entry { title: g.display.clone(), subtitle, chips, logo: None }
     }

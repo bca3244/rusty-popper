@@ -375,14 +375,21 @@ fn reflection(cv: &mut Cv, img: ImageId, x: f32, top: f32, w: f32, h: f32, alpha
     cv.restore();
 }
 
-/// Splits a title into two lines at the space nearest the middle, preferring
-/// to break before a "(Maker Year)" suffix.
-fn split_title(t: &str) -> (String, String) {
-    if let Some(i) = t.rfind(" (") {
-        if i > t.len() / 3 {
-            return (t[..i].to_string(), t[i + 1..].to_string());
+/// Splits "Name (Maker Year)" into the name and its parenthesised suffix.
+fn split_suffix(t: &str) -> (String, Option<String>) {
+    let t = t.trim();
+    if t.ends_with(')') {
+        if let Some(i) = t.rfind(" (") {
+            if i > 0 {
+                return (t[..i].trim_end().to_string(), Some(t[i + 1..].to_string()));
+            }
         }
     }
+    (t.to_string(), None)
+}
+
+/// Splits text into two lines at the space nearest the middle.
+fn split_middle(t: &str) -> (String, String) {
     let mid = t.len() / 2;
     let best = t.match_indices(' ').map(|(i, _)| i).min_by_key(|i| (*i as i64 - mid as i64).abs());
     match best {
@@ -390,7 +397,6 @@ fn split_title(t: &str) -> (String, String) {
         None => (t.to_string(), String::new()),
     }
 }
-
 fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     let idx = f.wheel.selected();
     let e = f.entry(idx);
@@ -402,48 +408,65 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     let text = |font: FontId, size: f32, c: Color, align: Align| {
         Paint::color(c).with_font(&[font]).with_font_size(size).with_text_align(align).with_text_baseline(Baseline::Alphabetic)
     };
-    if !e.subtitle.is_empty() {
+    // The small maker/year line only when the title doesn't already end with it.
+    if !e.subtitle.is_empty() && split_suffix(&e.title).1.is_none() {
         let _ = cv.fill_text(x + off, y, &e.subtitle, &text(f.fonts.mono, 26.0, hue_color(hue, 0.9, 0.72, a), Align::Left));
     }
-    // Title with a soft dark shadow. Long names shrink, then wrap to two lines.
+    // Title: the game name, then its "(Maker Year)" on a smaller second line.
+    // A long name shrinks to fit, then wraps onto two lines itself.
     let max_w = vw - 2.0 * x;
     let probe = text(f.fonts.display, 92.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), Align::Left);
     let width_at_92 = |cv: &Cv, s: &str| cv.measure_text(0.0, 0.0, s, &probe).map(|m| m.width()).unwrap_or(0.0);
-    let tw = width_at_92(cv, &e.title);
-    let (lines, size): (Vec<String>, f32) = if tw <= max_w {
-        (vec![e.title.clone()], 92.0)
+    let (name, suffix) = split_suffix(&e.title);
+    let tw = width_at_92(cv, &name).max(1.0);
+    let (name_lines, size): (Vec<String>, f32) = if tw <= max_w {
+        (vec![name.clone()], 92.0)
     } else if 92.0 * max_w / tw >= 64.0 {
-        (vec![e.title.clone()], 92.0 * max_w / tw)
+        (vec![name.clone()], 92.0 * max_w / tw)
     } else {
-        let (l1, l2) = split_title(&e.title);
+        let (l1, l2) = split_middle(&name);
         let widest = width_at_92(cv, &l1).max(width_at_92(cv, &l2)).max(1.0);
-        let size = (92.0 * max_w / widest).min(80.0);
-        (vec![l1, l2], size)
+        (vec![l1, l2], (92.0 * max_w / widest).min(80.0))
     };
     let line_h = size * 1.05;
     let mut ty = y + size; // first baseline sits one title line below the subtitle
-    for line in &lines {
+    let tx = x + off * 1.6;
+    for line in &name_lines {
         let shadow = text(f.fonts.display, size, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
-        let _ = cv.fill_text(x + off * 1.6 + 3.0, ty + 3.0, line, &shadow);
-        let _ = cv.fill_text(x + off * 1.6, ty, line, &text(f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
+        let _ = cv.fill_text(tx + 3.0, ty + 3.0, line, &shadow);
+        let _ = cv.fill_text(tx, ty, line, &text(f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
         ty += line_h;
     }
-    // Chips sit below the last title line.
-    let chip_top = ty - line_h + 28.0;
+    let mut last_baseline = ty - line_h;
+    if let Some(suffix) = &suffix {
+        let small = (size * 0.6).max(40.0);
+        let sw = width_at_92(cv, suffix) * small / 92.0;
+        let small = if sw > max_w { small * max_w / sw } else { small };
+        last_baseline += small * 1.2;
+        let shadow = text(f.fonts.display, small, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
+        let _ = cv.fill_text(tx + 2.0, last_baseline + 2.0, suffix, &shadow);
+        let _ = cv.fill_text(tx, last_baseline, suffix, &text(f.fonts.display, small, Color::rgbaf(0.86, 0.88, 0.93, 0.85 * a), Align::Left));
+    }
 
-    let mut chip_x = x + off * 2.0;
+    // Tag chips below the title, wrapping onto more rows as needed.
+    let mut chip_top = last_baseline + 28.0;
+    let left = x + off * 2.0;
+    let mut chip_x = left;
     for chip in &e.chips {
         let paint = text(f.fonts.body, 24.0, Color::rgbaf(0.875, 0.894, 0.933, a), Align::Left);
         let tw = cv.measure_text(0.0, 0.0, chip, &paint).map(|m| m.width()).unwrap_or(100.0);
         let w = tw + 32.0;
+        if chip_x > left && chip_x + w > x + max_w {
+            chip_x = left;
+            chip_top += 54.0;
+        }
         let mut p = Path::new();
         p.rounded_rect(chip_x, chip_top, w, 42.0, 21.0);
         cv.fill_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.08 * a)));
         cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.18 * a)).with_line_width(1.5));
         let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
         chip_x += w + 12.0;
-    }
-    let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
+    }    let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
     let counter = format!("{:02} / {}", idx + 1, f.order.len());
     let _ = cv.fill_text(vw - 96.0, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
 }

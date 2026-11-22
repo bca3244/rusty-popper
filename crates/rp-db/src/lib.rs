@@ -39,6 +39,8 @@ pub struct Game {
     /// LaunchCustomVar ([CUSTOM1] in scripts), CUSTOM2, CUSTOM3.
     pub custom: [Option<String>; 3],
     pub alt_mode: Option<String>,
+    /// Popper's TAGS, split on commas (e.g. VR, nFozzy, Fleep).
+    pub tags: Vec<String>,
 }
 
 /// A Popper playlist: either a SQL query over Games or a manual list.
@@ -121,7 +123,7 @@ impl PopperDb {
     pub fn games(&self) -> Result<Vec<Game>> {
         let mut st = self.conn.prepare(
             "SELECT GameID, EMUID, GameName, COALESCE(GameDisplay, GameName), GameFileName,
-                    Manufact, GameYear, NumPlayers, ROM, ALTEXE, LaunchCustomVar, CUSTOM2, CUSTOM3, AltRunMode
+                    Manufact, GameYear, NumPlayers, ROM, ALTEXE, LaunchCustomVar, CUSTOM2, CUSTOM3, AltRunMode, TAGS
              FROM Games WHERE Visible = 1 ORDER BY COALESCE(GameDisplay, GameName) COLLATE NOCASE",
         )?;
         let rows = st.query_map([], |r| {
@@ -138,6 +140,9 @@ impl PopperDb {
                 alt_exe: opt_text(r.get(9)?),
                 custom: [opt_text(r.get(10)?), opt_text(r.get(11)?), opt_text(r.get(12)?)],
                 alt_mode: opt_text(r.get(13)?),
+                tags: opt_text(r.get(14)?)
+                    .map(|t| t.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect())
+                    .unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
