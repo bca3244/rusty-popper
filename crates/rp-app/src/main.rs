@@ -220,6 +220,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let volume = settings.audio.volume.unwrap_or_else(|| screens.iter().find(|s| s.slot == Slot::PlayField).map_or(100, |s| s.volume)).clamp(0, 100);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -241,6 +242,7 @@ fn main() -> Result<()> {
         playlist: 0,
         view: Vec::new(),
         attract: settings.attract,
+        volume,
         last_input: Instant::now(),
         attract_on: false,
         next_attract: Instant::now(),
@@ -298,7 +300,17 @@ struct Gfx {
 
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
-const EXIT_MENU: &[&str] = &["Back to games", "Change playlist", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
+const EXIT_MENU: &[&str] = &["Back to games", "Change playlist", "Options", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
+
+/// Choices the Options screen cycles through with Start.
+const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
+const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
+const OPTION_ROWS: usize = 6; // style, attract, idle, interval, volume, back
+
+fn next_choice(choices: &[u64], cur: u64) -> u64 {
+    let i = choices.iter().position(|&c| c >= cur).map(|i| i + 1).unwrap_or(0);
+    choices[i % choices.len()]
+}
 
 struct Playing {
     rx: Receiver<Result<rp_launch::Outcome>>,
@@ -315,6 +327,7 @@ struct Playing {
 enum MenuKind {
     Exit,
     Playlists,
+    Options,
 }
 
 struct ExitMenu {
@@ -358,6 +371,8 @@ struct App {
     /// Item indices in the current playlist, in wheel order.
     view: Vec<usize>,
     attract: settings::AttractSettings,
+    /// Playfield video volume (0-100), adjustable in Options.
+    volume: i32,
     last_input: Instant,
     attract_on: bool,
     next_attract: Instant,
@@ -457,7 +472,7 @@ impl App {
                 ("hwdec", "auto-safe".to_string()),
                 ("osd-level", "0".to_string()),
                 ("aid", if audio { "auto" } else { "no" }.to_string()),
-                ("volume", screen.volume.to_string()),
+                ("volume", if screen.slot == Slot::PlayField { self.volume } else { screen.volume }.to_string()),
             ];
             let mut player = self.mpv.player(&opts).with_context(|| format!("{:?}", screen.slot))?;
             player.init_gl(&loader)?;
@@ -606,6 +621,47 @@ impl App {
         self.letter = Some((letter(pos), Instant::now()));
     }
 
+    /// Labels for the Options screen, with current values.
+    fn option_labels(&self) -> Vec<String> {
+        let onoff = |b: bool| if b { "On" } else { "Off" };
+        let mins = |s: u64| if s % 60 == 0 { format!("{} min", s / 60) } else { format!("{s} s") };
+        vec![
+            format!("Wheel style: {}", if self.style == WheelStyle::Arc { "Arc" } else { "Cover flow" }),
+            format!("Attract mode: {}", onoff(self.attract.enabled)),
+            format!("Attract starts after: {}", mins(self.attract.idle_secs)),
+            format!("Time per game: {} s", self.attract.interval_secs),
+            format!("Video volume: {}%", self.volume),
+            "Back".to_string(),
+        ]
+    }
+
+    /// Cycles the value on Options row `row`, applies it, and saves it.
+    fn change_option(&mut self, row: usize) {
+        match row {
+            0 => self.style = self.style.toggled(),
+            1 => self.attract.enabled = !self.attract.enabled,
+            2 => self.attract.idle_secs = next_choice(ATTRACT_IDLE_CHOICES, self.attract.idle_secs),
+            3 => self.attract.interval_secs = next_choice(ATTRACT_INTERVAL_CHOICES, self.attract.interval_secs),
+            4 => {
+                self.volume = if self.volume >= 100 { 0 } else { (self.volume / 10 + 1) * 10 };
+                if let Some(g) = &self.gfx {
+                    let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
+                }
+            }
+            _ => return,
+        }
+        let v = settings::Editable {
+            style: self.style,
+            attract_enabled: self.attract.enabled,
+            attract_idle_secs: self.attract.idle_secs,
+            attract_interval_secs: self.attract.interval_secs,
+            volume: self.volume,
+        };
+        if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
+            eprintln!("Couldn't save settings: {e:#}");
+        }
+    }
+
     fn act(&mut self, el: &ActiveEventLoop, action: input::Action) {
         use input::Action::*;
         self.last_input = Instant::now();
@@ -621,6 +677,7 @@ impl App {
         if let Some(menu) = self.menu.as_mut() {
             let n = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.len(),
+                MenuKind::Options => OPTION_ROWS,
                 MenuKind::Playlists => self.playlists.len() + 1,
             };
             match action {
@@ -635,14 +692,22 @@ impl App {
                 Quit => el.exit(),
                 Start => {
                     let (kind, choice) = (menu.kind, menu.selected);
+                    // Options rows change in place; the menu stays open.
+                    if kind == MenuKind::Options && choice < OPTION_ROWS - 1 {
+                        self.change_option(choice);
+                        return;
+                    }
                     self.menu = None;
                     match (kind, choice) {
                         (MenuKind::Exit, 1) => {
                             self.menu = Some(ExitMenu { kind: MenuKind::Playlists, selected: self.playlist, opened: Instant::now() });
                         }
-                        (MenuKind::Exit, 2) => el.exit(),
-                        (MenuKind::Exit, 3) => power(el, "/r"),
-                        (MenuKind::Exit, 4) => power(el, "/s"),
+                        (MenuKind::Exit, 2) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: 0, opened: Instant::now() });
+                        }
+                        (MenuKind::Exit, 3) => el.exit(),
+                        (MenuKind::Exit, 4) => power(el, "/r"),
+                        (MenuKind::Exit, 5) => power(el, "/s"),
                         (MenuKind::Playlists, n) => self.set_playlist(n),
                         _ => {}
                     }
@@ -771,6 +836,7 @@ impl App {
         }
         self.attract_tick();
         let style = self.style;
+        let option_labels = self.option_labels();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
 
         let now_i = Instant::now();
@@ -852,8 +918,13 @@ impl App {
             let names: Vec<&str> = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.to_vec(),
                 MenuKind::Playlists => std::iter::once("All games").chain(self.playlists.iter().map(|p| p.name.as_str())).collect(),
+                MenuKind::Options => option_labels.iter().map(String::as_str).collect(),
             };
-            let title = if menu.kind == MenuKind::Exit { "Exit" } else { "Playlists" };
+            let title = match menu.kind {
+                MenuKind::Exit => "Exit",
+                MenuKind::Playlists => "Playlists",
+                MenuKind::Options => "Options",
+            };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw as f32, lh as f32, &view, &g.fonts);
         }

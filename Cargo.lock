@@ -1554,6 +1554,7 @@ dependencies = [
  "rp-launch",
  "serde",
  "toml",
+ "toml_edit",
  "windows-sys 0.61.2",
  "winit",
 ]
@@ -1892,6 +1893,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
