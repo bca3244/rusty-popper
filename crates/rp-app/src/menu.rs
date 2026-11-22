@@ -55,6 +55,56 @@ impl App {
         self.letter = Some((letters[pos], Instant::now()));
     }
 
+    /// Shows the selected game's info or help card on the screen Popper
+    /// assigns it (if that's one of ours and it's showing), else the playfield.
+    pub(crate) fn open_card(&mut self, kind: overlay::CardKind) {
+        let Some(g) = self.gfx.as_mut() else { return };
+        let Some(&item) = self.view.get(g.wheel.selected()) else { return };
+        if self.lib.items[item].is_playlist() {
+            return;
+        }
+        let slot = if kind == overlay::CardKind::Info { Slot::GameInfo } else { Slot::GameHelp };
+        let rect = if kind == overlay::CardKind::Info { &self.card_screens.0 } else { &self.card_screens.1 };
+        let out = rect
+            .as_ref()
+            .and_then(|r| {
+                let (cx, cy) = (r.x + r.width / 2, r.y + r.height / 2);
+                g.outs.iter().position(|o| {
+                    let s = &o.screen;
+                    cx >= s.x && cx < s.x + s.width && cy >= s.y && cy < s.y + s.height && o.window.is_visible() != Some(false)
+                })
+            })
+            .unwrap_or(0);
+        let image = self.lib.items[item].media(slot).filter(|p| !is_video(p)).and_then(|p| match image::open(&p) {
+            Ok(im) => Some(im.to_rgba8()),
+            Err(e) => {
+                log::warn!("Card {}: {e}", p.display());
+                None
+            }
+        });
+        let image = image.and_then(|im| {
+            use femtovg::rgb::FromSlice;
+            let (w, h) = im.dimensions();
+            g.context.make_current(&g.outs[0].surface).ok()?;
+            let id = g
+                .canvas
+                .create_image(femtovg::imgref::Img::new(im.as_raw().as_rgba(), w as usize, h as usize), femtovg::ImageFlags::empty())
+                .ok()?;
+            Some((id, w as f32, h as f32))
+        });
+        log::info!("{:?} card for {} on {:?}: {}", kind, self.lib.items[item].title, g.outs[out].screen.slot, if image.is_some() { "shown" } else { "none" });
+        self.sounds.play(sfx::Sfx::Select);
+        self.card = Some(overlay::Card { kind, image, opened: Instant::now(), out });
+    }
+
+    pub(crate) fn close_card(&mut self) {
+        if let Some(card) = self.card.take() {
+            if let (Some((img, _, _)), Some(g)) = (card.image, self.gfx.as_mut()) {
+                g.canvas.delete_image(img);
+            }
+        }
+    }
+
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
@@ -65,6 +115,8 @@ impl App {
             format!("Attract starts after: {}", mins(self.attract.idle_secs)),
             format!("Time per game: {} s", self.attract.interval_secs),
             format!("Video volume: {}%", self.volume),
+            format!("Sound effects: {}", onoff(self.sounds.enabled)),
+            format!("Effects volume: {}%", self.sounds.volume),
             "Back".to_string(),
         ]
     }
@@ -82,6 +134,11 @@ impl App {
                     let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
                 }
             }
+            5 => self.sounds.enabled = !self.sounds.enabled,
+            6 => {
+                let v = if self.sounds.volume >= 100 { 0 } else { (self.sounds.volume / 10 + 1) * 10 };
+                self.sounds.set_volume(v);
+            }
             _ => return,
         }
         let v = settings::Editable {
@@ -90,6 +147,8 @@ impl App {
             attract_idle_secs: self.attract.idle_secs,
             attract_interval_secs: self.attract.interval_secs,
             volume: self.volume,
+            sound_enabled: self.sounds.enabled,
+            sound_volume: self.sounds.volume,
         };
         if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
             log::warn!("Couldn't save settings: {e:#}");
@@ -120,6 +179,11 @@ impl App {
         if self.gfx.is_none() {
             return;
         }
+        // An info / help card closes on any button.
+        if self.card.is_some() {
+            self.close_card();
+            return;
+        }
         // While a menu is open, browsing buttons move its highlight.
         if let Some(menu) = self.menu.as_mut() {
             let n = match menu.kind {
@@ -127,14 +191,21 @@ impl App {
                 MenuKind::Options => OPTION_ROWS,
             };
             match action {
-                Prev | PagePrev | LetterPrev => menu.selected = (menu.selected + n - 1) % n,
-                Next | PageNext | LetterNext => menu.selected = (menu.selected + 1) % n,
+                Prev | PagePrev | LetterPrev => {
+                    menu.selected = (menu.selected + n - 1) % n;
+                    self.sounds.play(sfx::Sfx::MenuMove);
+                }
+                Next | PageNext | LetterNext => {
+                    menu.selected = (menu.selected + 1) % n;
+                    self.sounds.play(sfx::Sfx::MenuMove);
+                }
                 Menu => self.menu = None,
-                Playlists => {}
+                Playlists | Info | Help => {}
 
                 Quit => el.exit(),
                 Start => {
                     let (kind, choice) = (menu.kind, menu.selected);
+                    self.sounds.play(sfx::Sfx::Select);
                     // Options rows change in place; the menu stays open.
                     if kind == MenuKind::Options && choice < OPTION_ROWS - 1 {
                         self.change_option(choice);
@@ -157,7 +228,12 @@ impl App {
         }
         let g = self.gfx.as_mut().unwrap();
         match action {
-            Menu => self.menu = Some(ExitMenu { kind: MenuKind::Exit, selected: 0, opened: Instant::now() }),
+            Menu => {
+                self.menu = Some(ExitMenu { kind: MenuKind::Exit, selected: 0, opened: Instant::now() });
+                self.sounds.play(sfx::Sfx::Select);
+            }
+            Info => self.open_card(overlay::CardKind::Info),
+            Help => self.open_card(overlay::CardKind::Help),
             // Jump to the playlist wheels (after the games).
             Playlists => {
                 let cur = g.wheel.selected();
@@ -165,17 +241,35 @@ impl App {
                     g.wheel.step(pos as i64 - cur as i64);
                 }
             }
-            Prev => g.wheel.step(-1),
-            Next => g.wheel.step(1),
+            Prev => {
+                g.wheel.step(-1);
+                self.sounds.play(sfx::Sfx::Move(-1));
+            }
+            Next => {
+                g.wheel.step(1);
+                self.sounds.play(sfx::Sfx::Move(1));
+            }
             // Popper's Page Prior/Next (usually the magna-saves) jump by letter.
-            PagePrev | LetterPrev => self.jump_letter(-1),
-            PageNext | LetterNext => self.jump_letter(1),
+            PagePrev | LetterPrev => {
+                self.jump_letter(-1);
+                self.sounds.play(sfx::Sfx::Jump);
+            }
+            PageNext | LetterNext => {
+                self.jump_letter(1);
+                self.sounds.play(sfx::Sfx::Jump);
+            }
             ToggleStyle => self.style = self.style.toggled(),
             Start => {
                 if let Some(&item) = self.view.get(g.wheel.selected()) {
                     match self.lib.items[item].kind {
-                        Kind::Playlist(n) => self.set_playlist(n),
-                        Kind::Game { .. } => self.launch(item),
+                        Kind::Playlist(n) => {
+                            self.sounds.play(sfx::Sfx::Select);
+                            self.set_playlist(n);
+                        }
+                        Kind::Game { .. } => {
+                            self.sounds.play(sfx::Sfx::Launch);
+                            self.launch(item);
+                        }
                     }
                 }
             }
