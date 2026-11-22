@@ -4,7 +4,7 @@ A fast, sleek alternate front end for [PinUP Popper](https://www.nailbuster.com/
 
 Rusty Popper replaces **PinUpMenu.exe** only. Everything else stays as Popper set it up: your tables, media, playlists, button setup, emulator launch scripts, PinUP Player, B2S and DOF. You can switch back to Popper at any time.
 
-<!-- Demo video: drag rusty-popper-demo-github.mp4 here in GitHub's editor to embed it. -->
+https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 
 ## Features
 
