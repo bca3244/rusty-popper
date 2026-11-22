@@ -41,6 +41,15 @@ pub struct Game {
     pub alt_mode: Option<String>,
 }
 
+/// A Popper playlist: either a SQL query over Games or a manual list.
+#[derive(Debug, Clone)]
+pub struct Playlist {
+    pub id: i64,
+    pub name: String,
+    /// Set for SQL playlists (PlayListType 1).
+    pub sql: Option<String>,
+}
+
 /// One row of PinUPFunctions: a menu action and its keyboard / joystick binding.
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -132,6 +141,55 @@ impl PopperDb {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Visible playlists in Popper's display order.
+    pub fn playlists(&self) -> Result<Vec<Playlist>> {
+        let mut st = self.conn.prepare(
+            "SELECT PlayListID, PlayName, PlayListType, PlayListSQL FROM PlayLists
+             WHERE Visible = 1 ORDER BY DisplayOrder, PlayListID",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(Playlist {
+                id: r.get(0)?,
+                name: opt_text(r.get(1)?).unwrap_or_else(|| "Playlist".into()),
+                sql: if opt_int(r.get(2)?) == Some(1) { opt_text(r.get(3)?) } else { None },
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// GameIDs in a playlist, in the playlist's order. SQL playlists run their
+    /// query (on the read-only copy); manual ones use PlayListDetails.
+    pub fn playlist_games(&self, pl: &Playlist) -> Result<Vec<i64>> {
+        let mut ids = Vec::new();
+        match &pl.sql {
+            Some(sql) => {
+                let mut st = self.conn.prepare(sql).with_context(|| format!("playlist {:?} query", pl.name))?;
+                let col = (0..st.column_count())
+                    .find(|&i| st.column_name(i).is_ok_and(|n| n.eq_ignore_ascii_case("GameID")))
+                    .ok_or_else(|| anyhow::anyhow!("playlist {:?} query has no GameID column", pl.name))?;
+                let mut rows = st.query([])?;
+                while let Some(r) = rows.next()? {
+                    if let Some(id) = opt_int(r.get(col)?) {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
+            None => {
+                let mut st = self.conn.prepare(
+                    "SELECT GameID FROM PlayListDetails WHERE PlayListID = ?1 AND COALESCE(Visible, 1) = 1
+                     ORDER BY DisplayOrder, UniqueID",
+                )?;
+                let rows = st.query_map([pl.id], |r| r.get::<_, i64>(0))?;
+                for id in rows {
+                    ids.push(id?);
+                }
+            }
+        }
+        Ok(ids)
     }
 
     /// Popper's menu rotation (GlobalSettings.ThumbRotate, degrees clockwise):

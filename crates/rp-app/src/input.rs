@@ -11,20 +11,22 @@ pub enum Action {
     Next,
     PagePrev,
     PageNext,
-    /// Jump 10 games (keyboard Up/Down).
-    JumpPrev,
-    JumpNext,
+    /// Jump to the previous / next starting letter.
+    LetterPrev,
+    LetterNext,
     Start,
     Quit,
     /// Open (or close) the exit menu.
     Menu,
+    /// Open the playlist picker.
+    Playlists,
     ToggleStyle,
 }
 
 impl Action {
     /// Browsing actions auto-repeat while held.
     fn repeats(self) -> bool {
-        matches!(self, Action::Prev | Action::Next | Action::PagePrev | Action::PageNext | Action::JumpPrev | Action::JumpNext)
+        matches!(self, Action::Prev | Action::Next | Action::PagePrev | Action::PageNext | Action::LetterPrev | Action::LetterNext)
     }
 
     fn from_popper(name: &str) -> Option<Action> {
@@ -33,6 +35,7 @@ impl Action {
             "Game Next" => Action::Next,
             "Page Prior" => Action::PagePrev,
             "Page Next" => Action::PageNext,
+            "List Next" | "List Prior" => Action::Playlists,
             "Game Start" | "_Game Start Alt" => Action::Start,
             "Menu/System Exit" | "System Menu" | "Exit Emulators" => Action::Menu,
             _ => return None,
@@ -47,17 +50,22 @@ pub struct Bindings {
 
 impl Bindings {
     /// Built-in defaults plus whatever Popper has bound in PinUPFunctions.
-    pub fn new(functions: &[Function], extra_menu_buttons: &[u32]) -> Self {
+    /// `joy_overrides` (from rusty-popper.toml) replace any Popper binding on
+    /// the same button.
+    pub fn new(functions: &[Function], joy_overrides: &[(u32, Action)]) -> Self {
         let mut keys = vec![
             (KeyCode::ArrowLeft, Action::Prev),
             (KeyCode::ShiftLeft, Action::Prev),
             (KeyCode::ArrowRight, Action::Next),
             (KeyCode::ShiftRight, Action::Next),
-            (KeyCode::ArrowUp, Action::JumpPrev),
-            (KeyCode::ArrowDown, Action::JumpNext),
+            (KeyCode::ArrowUp, Action::LetterPrev),
+            (KeyCode::ArrowDown, Action::LetterNext),
+            (KeyCode::ControlLeft, Action::LetterPrev),
+            (KeyCode::ControlRight, Action::LetterNext),
             (KeyCode::Enter, Action::Start),
             (KeyCode::NumpadEnter, Action::Start),
             (KeyCode::Escape, Action::Menu),
+            (KeyCode::KeyP, Action::Playlists),
             (KeyCode::KeyQ, Action::Quit),
             (KeyCode::KeyW, Action::ToggleStyle),
         ];
@@ -71,8 +79,9 @@ impl Bindings {
                 joy.push((b as u32, action));
             }
         }
-        for b in extra_menu_buttons.iter().filter(|b| (1..=32).contains(*b)) {
-            joy.push((*b, Action::Menu));
+        for &(b, action) in joy_overrides.iter().filter(|(b, _)| (1..=32).contains(b)) {
+            joy.retain(|(jb, _)| *jb != b);
+            joy.push((b, action));
         }
         // Popper often binds one button to several functions (e.g. joy 9 for
         // both System Menu and Exit Emulators); fire each action once.

@@ -149,9 +149,23 @@ fn main() -> Result<()> {
     let db = db::PopperDb::open_copy(&args.popper.join("PUPDatabase.db"))?;
     let emus = db.emulators()?;
     let items = load_items(&args.popper, &emus, db.games()?);
-    let bindings = input::Bindings::new(&db.functions()?, &settings.input.menu_joy_buttons);
+    let mut joy_overrides: Vec<(u32, input::Action)> = Vec::new();
+    let inp = &settings.input;
+    for (buttons, action) in [
+        (&inp.menu_joy_buttons, input::Action::Menu),
+        (&inp.letter_prev_joy_buttons, input::Action::LetterPrev),
+        (&inp.letter_next_joy_buttons, input::Action::LetterNext),
+        (&inp.playlist_joy_buttons, input::Action::Playlists),
+    ] {
+        joy_overrides.extend(buttons.iter().map(|b| (*b, action)));
+    }
+    let bindings = input::Bindings::new(&db.functions()?, &joy_overrides);
     let ui_rotation = settings.playfield.ui_rotation.unwrap_or(db.menu_rotation().unwrap_or(0)).rem_euclid(360);
-    drop(db);
+    let playlists = db.playlists().unwrap_or_else(|e| {
+        eprintln!("Couldn't read playlists: {e:#}");
+        Vec::new()
+    });
+    println!("Playlists: {}", playlists.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
     println!("Menu rotation: {ui_rotation} deg");
     println!("DB: {} visible emulators, {} games on the wheel", emus.len(), items.len());
     println!("Input: {}", bindings.describe());
@@ -222,6 +236,16 @@ fn main() -> Result<()> {
         menu: None,
         popper_dir: args.popper.clone(),
         playing: None,
+        db,
+        playlists,
+        playlist: 0,
+        view: Vec::new(),
+        attract: settings.attract,
+        last_input: Instant::now(),
+        attract_on: false,
+        next_attract: Instant::now(),
+        rng: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1)) | 1,
+        letter: None,
         stats: std::sync::Arc::new(std::sync::Mutex::new(db::StatsWriter::new(
             &args.popper.join("PUPDatabase.db"),
             &exe_dir().join("backups"),
@@ -274,7 +298,7 @@ struct Gfx {
 
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
-const EXIT_MENU: &[&str] = &["Back to games", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
+const EXIT_MENU: &[&str] = &["Back to games", "Change playlist", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
 
 struct Playing {
     rx: Receiver<Result<rp_launch::Outcome>>,
@@ -287,7 +311,14 @@ struct Playing {
     others_paused: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuKind {
+    Exit,
+    Playlists,
+}
+
 struct ExitMenu {
+    kind: MenuKind,
     selected: usize,
     opened: Instant,
 }
@@ -319,6 +350,33 @@ struct App {
     playing: Option<Playing>,
     /// Records plays in Popper's GamesStats (shared with the game thread).
     stats: std::sync::Arc<std::sync::Mutex<db::StatsWriter>>,
+    /// Read-only copy of Popper's DB, kept for running playlist queries.
+    db: db::PopperDb,
+    playlists: Vec<db::Playlist>,
+    /// 0 = all games, n = playlists[n - 1].
+    playlist: usize,
+    /// Item indices in the current playlist, in wheel order.
+    view: Vec<usize>,
+    attract: settings::AttractSettings,
+    last_input: Instant,
+    attract_on: bool,
+    next_attract: Instant,
+    rng: u64,
+    /// Letter shown after a jump-by-letter, and when.
+    letter: Option<(char, Instant)>,
+}
+
+/// The file next to the exe that remembers the last playlist.
+fn state_path() -> PathBuf {
+    exe_dir().join("last-playlist.txt")
+}
+
+/// Group a title by its first letter; digits and symbols share '#'.
+fn letter_of(title: &str) -> char {
+    match title.trim_start().chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase(),
+        _ => '#',
+    }
 }
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
@@ -333,6 +391,18 @@ fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
 
 impl App {
     fn init(&mut self, el: &ActiveEventLoop) -> Result<()> {
+        // Start in the last playlist used (if it still exists), on the --game
+        // match or that playlist's first game.
+        let last = std::fs::read_to_string(state_path()).unwrap_or_default();
+        let saved = self.playlists.iter().position(|p| p.name == last.trim()).map(|i| i + 1).unwrap_or(0);
+        self.playlist = saved;
+        self.view = self.playlist_view(saved);
+        if self.view.is_empty() || (self.start != 0 && !self.view.contains(&self.start)) {
+            self.playlist = 0;
+            self.view = (0..self.items.len()).collect();
+        }
+        let start_pos = self.view.iter().position(|&i| i == self.start).unwrap_or(0);
+        self.start = self.view[start_pos];
         // Playfield first: its window creates the GL display and config.
         let mut order: Vec<Screen> = self.screens.clone();
         order.sort_by_key(|s| (s.slot != Slot::PlayField) as u8);
@@ -432,7 +502,7 @@ impl App {
             fonts,
             entries: self.items.iter().map(Item::entry).collect(),
             logos,
-            wheel: wheel::Wheel::new(n, self.start),
+            wheel: wheel::Wheel::new(self.view.len(), start_pos),
             joysticks: input::Joysticks::new(),
             shown: self.start,
             swapped_at: -10.0,
@@ -445,25 +515,135 @@ impl App {
         Ok(())
     }
 
-    #[allow(clippy::needless_return)]
+    /// Item indices for playlist `n` (0 = all games), in wheel order.
+    fn playlist_view(&self, n: usize) -> Vec<usize> {
+        if n == 0 || n > self.playlists.len() {
+            return (0..self.items.len()).collect();
+        }
+        let pl = &self.playlists[n - 1];
+        match self.db.playlist_games(pl) {
+            Ok(ids) => ids.iter().filter_map(|id| self.items.iter().position(|it| it.game.id == *id)).collect(),
+            Err(e) => {
+                eprintln!("Playlist {:?}: {e:#}", pl.name);
+                Vec::new()
+            }
+        }
+    }
+
+    fn playlist_name(&self) -> &str {
+        match self.playlist {
+            0 => "All games",
+            n => &self.playlists[n - 1].name,
+        }
+    }
+
+    /// Switches to playlist `n`, staying on the current game if it's in it.
+    fn set_playlist(&mut self, n: usize) {
+        let view = self.playlist_view(n);
+        let Some(g) = self.gfx.as_mut() else { return };
+        let current = self.view.get(g.wheel.selected()).copied();
+        let pos = current.and_then(|c| view.iter().position(|&i| i == c)).unwrap_or(0);
+        self.playlist = n;
+        self.view = view;
+        g.wheel = wheel::Wheel::new(self.view.len().max(1), pos);
+        g.wheel.info_t = 0.0;
+        if let Some(&item) = self.view.get(pos) {
+            if item != g.shown {
+                g.shown = item;
+                g.swapped_at = (Instant::now() - g.t0).as_secs_f32();
+                for o in &g.outs {
+                    o.show(self.items[item].media(o.screen.slot).as_deref());
+                }
+            }
+        }
+        let name = self.playlist_name().to_string();
+        println!("Playlist: {name} ({} games)", self.view.len());
+        let _ = std::fs::write(state_path(), name);
+    }
+
+    /// Moves to the first game of the next (`dir` > 0) or previous letter group.
+    /// Going back from inside a group first goes to that group's start.
+    fn jump_letter(&mut self, dir: i64) {
+        let Some(g) = self.gfx.as_mut() else { return };
+        let n = self.view.len();
+        if n == 0 {
+            return;
+        }
+        let letter = |pos: usize| letter_of(&self.items[self.view[pos % n]].game.display);
+        let cur = g.wheel.selected();
+        let here = letter(cur);
+        let mut pos = cur;
+        if dir > 0 {
+            for _ in 0..n {
+                pos = (pos + 1) % n;
+                if letter(pos) != here {
+                    break;
+                }
+            }
+        } else {
+            let at_group_start = letter((cur + n - 1) % n) != here;
+            // Step back into the previous group (or stay in this one), then to its start.
+            if at_group_start {
+                pos = (pos + n - 1) % n;
+            }
+            let target = letter(pos);
+            for _ in 0..n {
+                let prev = (pos + n - 1) % n;
+                if letter(prev) != target || prev == cur {
+                    break;
+                }
+                pos = prev;
+            }
+        }
+        // Shortest way round the wheel.
+        let mut d = pos as i64 - cur as i64;
+        if d > n as i64 / 2 {
+            d -= n as i64;
+        } else if d < -(n as i64 / 2) {
+            d += n as i64;
+        }
+        g.wheel.step(d);
+        self.letter = Some((letter(pos), Instant::now()));
+    }
+
     fn act(&mut self, el: &ActiveEventLoop, action: input::Action) {
         use input::Action::*;
-        let Some(g) = self.gfx.as_mut() else { return };
-        // While the exit menu is open, browsing buttons move its highlight.
+        self.last_input = Instant::now();
+        // Any button just wakes the menu from attract mode.
+        if self.attract_on {
+            self.attract_on = false;
+            return;
+        }
+        if self.gfx.is_none() {
+            return;
+        }
+        // While a menu is open, browsing buttons move its highlight.
         if let Some(menu) = self.menu.as_mut() {
-            let n = EXIT_MENU.len();
+            let n = match menu.kind {
+                MenuKind::Exit => EXIT_MENU.len(),
+                MenuKind::Playlists => self.playlists.len() + 1,
+            };
             match action {
-                Prev | PagePrev | JumpPrev => menu.selected = (menu.selected + n - 1) % n,
-                Next | PageNext | JumpNext => menu.selected = (menu.selected + 1) % n,
+                Prev | PagePrev | LetterPrev => menu.selected = (menu.selected + n - 1) % n,
+                Next | PageNext | LetterNext => menu.selected = (menu.selected + 1) % n,
                 Menu => self.menu = None,
+                Playlists => {
+                    if menu.kind == MenuKind::Playlists {
+                        self.menu = None;
+                    }
+                }
                 Quit => el.exit(),
                 Start => {
-                    let choice = menu.selected;
+                    let (kind, choice) = (menu.kind, menu.selected);
                     self.menu = None;
-                    match choice {
-                        1 => el.exit(),
-                        2 => power(el, "/r"),
-                        3 => power(el, "/s"),
+                    match (kind, choice) {
+                        (MenuKind::Exit, 1) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Playlists, selected: self.playlist, opened: Instant::now() });
+                        }
+                        (MenuKind::Exit, 2) => el.exit(),
+                        (MenuKind::Exit, 3) => power(el, "/r"),
+                        (MenuKind::Exit, 4) => power(el, "/s"),
+                        (MenuKind::Playlists, n) => self.set_playlist(n),
                         _ => {}
                     }
                 }
@@ -471,25 +651,65 @@ impl App {
             }
             return;
         }
+        let g = self.gfx.as_mut().unwrap();
         match action {
-            Menu => self.menu = Some(ExitMenu { selected: 0, opened: Instant::now() }),
-            Prev => g.wheel.step(-1),
-            Next => g.wheel.step(1),
+            Menu => self.menu = Some(ExitMenu { kind: MenuKind::Exit, selected: 0, opened: Instant::now() }),
+            Playlists => self.menu = Some(ExitMenu { kind: MenuKind::Playlists, selected: self.playlist, opened: Instant::now() }),
             // On Brian's cabinet Popper's "Page" functions sit on the flipper
             // buttons and step one game, so they do the same here.
-            PagePrev => g.wheel.step(-1),
-            PageNext => g.wheel.step(1),
-            JumpPrev => g.wheel.step(-10),
-            JumpNext => g.wheel.step(10),
+            Prev | PagePrev => g.wheel.step(-1),
+            Next | PageNext => g.wheel.step(1),
+            LetterPrev => self.jump_letter(-1),
+            LetterNext => self.jump_letter(1),
             ToggleStyle => self.style = self.style.toggled(),
             Start => {
-                let sel = g.wheel.selected();
-                self.launch(sel);
+                if let Some(&item) = self.view.get(g.wheel.selected()) {
+                    self.launch(item);
+                }
             }
             Quit => el.exit(),
         }
     }
 
+    /// Attract mode: after a while with no input, hop to a random game every
+    /// few seconds until any button is pressed.
+    fn attract_tick(&mut self) {
+        if !self.attract.enabled || self.menu.is_some() || self.playing.is_some() || self.view.len() < 2 {
+            return;
+        }
+        let now = Instant::now();
+        if !self.attract_on {
+            if now - self.last_input >= Duration::from_secs(self.attract.idle_secs) {
+                println!("Attract mode on");
+                self.attract_on = true;
+                self.next_attract = now;
+            } else {
+                return;
+            }
+        }
+        if now < self.next_attract {
+            return;
+        }
+        self.next_attract = now + Duration::from_secs(self.attract.interval_secs.max(3));
+        // xorshift64: good enough to pick a game.
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        let n = self.view.len() as i64;
+        let Some(g) = self.gfx.as_mut() else { return };
+        let cur = g.wheel.selected() as i64;
+        let mut target = (self.rng % n as u64) as i64;
+        if target == cur {
+            target = (target + 1) % n;
+        }
+        let mut d = target - cur;
+        if d > n / 2 {
+            d -= n;
+        } else if d < -(n / 2) {
+            d += n;
+        }
+        g.wheel.step(d);
+    }
     fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
         // While a game runs, keep our windows up behind it (black, with a
         // "Launching" screen on the playfield) so the desktop never shows.
@@ -549,6 +769,7 @@ impl App {
         for a in actions {
             self.act(el, a);
         }
+        self.attract_tick();
         let style = self.style;
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
 
@@ -573,7 +794,7 @@ impl App {
 
         g.wheel.update(dt, now);
         // Swap media once the selection has rested for a moment.
-        let sel = g.wheel.selected();
+        let sel = self.view.get(g.wheel.selected()).copied().unwrap_or(g.shown);
         if sel != g.shown && now - g.wheel.changed_at >= wheel::MEDIA_DEBOUNCE {
             g.shown = sel;
             g.swapped_at = now;
@@ -611,10 +832,29 @@ impl App {
             g.canvas.translate(-(lw as f32) / 2.0, -(lh as f32) / 2.0);
         }
         let fade = if g.shown == sel { ((now - g.swapped_at) / wheel::MEDIA_FADE).min(1.0) } else { 1.0 };
-        let frame = wheel::Frame { style, wheel: &g.wheel, entries: &g.entries, fonts: &g.fonts, video_fade: fade };
+        let playlist_name = match self.playlist {
+            0 => "All games",
+            n => self.playlists[n - 1].name.as_str(),
+        };
+        let letter = self.letter.map(|(c, at)| (c, at.elapsed().as_secs_f32()));
+        let frame = wheel::Frame {
+            style,
+            wheel: &g.wheel,
+            entries: &g.entries,
+            order: &self.view,
+            playlist: playlist_name,
+            fonts: &g.fonts,
+            video_fade: fade,
+            letter,
+        };
         wheel::draw(&mut g.canvas, lw as f32, lh as f32, &frame);
         if let Some(menu) = &self.menu {
-            let view = wheel::MenuView { title: "Exit", options: EXIT_MENU, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
+            let names: Vec<&str> = match menu.kind {
+                MenuKind::Exit => EXIT_MENU.to_vec(),
+                MenuKind::Playlists => std::iter::once("All games").chain(self.playlists.iter().map(|p| p.name.as_str())).collect(),
+            };
+            let title = if menu.kind == MenuKind::Exit { "Exit" } else { "Playlists" };
+            let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw as f32, lh as f32, &view, &g.fonts);
         }
         g.canvas.restore();
