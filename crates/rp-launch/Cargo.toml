@@ -1,0 +1,9 @@
+[package]
+name = "rp-launch"
+description = "Runs per-emulator LaunchScript/PostScript and tracks the game process."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

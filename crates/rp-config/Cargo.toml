@@ -1,0 +1,9 @@
+[package]
+name = "rp-config"
+description = "Parses PinUpPlayer.ini screen layout and resolves the POPMedia tree."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

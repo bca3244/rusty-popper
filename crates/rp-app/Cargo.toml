@@ -1,0 +1,16 @@
+[package]
+name = "rusty-popper"
+description = "Fast alternate frontend for Pinup Popper (replaces PinUpMenu.exe)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rusty-popper"
+path = "src/main.rs"
+
+[dependencies]
+rp-db.workspace = true
+rp-config.workspace = true
+rp-launch.workspace = true

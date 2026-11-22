@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+# local test copies of cab data
+/testdata/local/
+*.db-journal

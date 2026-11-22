@@ -1,0 +1,9 @@
+[package]
+name = "rp-db"
+description = "Read-only access to Popper's PUPDatabase.db (Games, Emulators, Playlists)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
