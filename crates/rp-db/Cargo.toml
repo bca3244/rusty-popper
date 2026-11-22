@@ -7,3 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = "1.0.104"
+rusqlite = { version = "0.43.0", features = ["bundled"] }

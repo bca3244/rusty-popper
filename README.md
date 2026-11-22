@@ -44,6 +44,20 @@ crates/
 cargo build --release
 ```
 
+## Phase 1 spike
+
+`rusty-popper` reads `PUPDatabase.db` from a temp copy, opened read-only. It also reads the screen layout from `PinUpPlayer.ini`. It then loops one game's media on each live screen (Topper, DMD, Backglass, Playfield and FullDMD), each in a borderless Win32 window at Popper's coordinates and rotation. libmpv renders into each window via `wid`.
+
+It needs `libmpv-2.dll` from the `mpv-dev-x86_64` build of zhongfly/mpv-winbuild. The spike looks for it next to the exe, then in `D:\Claude\deps\mpv\`, and you can also pass `--mpv PATH`. The DLL is loaded at runtime, so building needs no import library.
+
+```
+rusty-popper --list
+rusty-popper --dry-run --game "addams family"
+rusty-popper --game "addams family" --seconds 60
+```
+
+Press Esc (or q in a video window) to quit. The spike never writes to Popper's files.
+
 Windows is the target platform. Rusty Popper is not affiliated with or endorsed by nailbuster / PinUP Popper.
 
 ## License
