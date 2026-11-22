@@ -7,3 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = "1.0.104"
+rp-db.workspace = true
+sysinfo = "0.40.4"

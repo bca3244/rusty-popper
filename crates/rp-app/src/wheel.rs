@@ -455,3 +455,47 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
     }
     cv.restore();
 }
+
+/// "Launching <game>" / "Exiting <game>" screen shown on the playfield while the emulator starts or closes
+/// (and left behind the game window, so the desktop never shows).
+pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, verb: &str, emulator: &str, t: f32, fonts: &Fonts) {
+    let s = (h / DESIGN_H).min(w / DESIGN_H);
+    let (vw, dh) = (w / s, h / s);
+    cv.save();
+    cv.scale(s, s);
+    fill_rect(cv, 0.0, 0.0, vw, dh, Color::rgbf(0.0, 0.0, 0.0));
+    let a = ease_out(t / 0.3);
+    let hue = entry_hue(e);
+    let cy = dh * 0.42;
+    slot_glow(cv, vw / 2.0, cy, 520.0, 300.0, hue, a);
+    let sc = 0.92 + 0.08 * ease_out(t / 0.5);
+    let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
+    let (lw, lh) = fit(aspect, 760.0 * sc, 520.0 * sc);
+    cv.save();
+    cv.translate(vw / 2.0, cy);
+    draw_logo(cv, e, lw, lh, a, a, fonts);
+    cv.restore();
+
+    let spin_y = cy + 520.0 * 0.5 + 120.0;
+    let rot = t * 5.5;
+    let mut p = Path::new();
+    p.arc(vw / 2.0, spin_y, 34.0, rot, rot + PI * 1.4, femtovg::Solidity::Hole);
+    let mut paint = Paint::color(hue_color(hue, 1.0, 0.66, a)).with_line_width(6.0);
+    paint.set_line_cap(femtovg::LineCap::Round);
+    cv.stroke_path(&p, &paint);
+
+    let title_size = 46.0f32.min((vw - 120.0) / (e.title.chars().count().max(1) as f32 + 10.0) * 1.9);
+    let text = |font: FontId, size: f32, c: Color| {
+        Paint::color(c).with_font(&[font]).with_font_size(size).with_text_align(Align::Center).with_text_baseline(Baseline::Alphabetic)
+    };
+    let _ = cv.fill_text(vw / 2.0, spin_y + 110.0, format!("{verb} {}", e.title), &text(fonts.display, title_size, Color::rgbaf(0.93, 0.945, 0.97, a)));
+    let _ = cv.fill_text(vw / 2.0, spin_y + 156.0, emulator.to_uppercase(), &text(fonts.mono, 24.0, Color::rgbaf(0.9, 0.92, 0.96, 0.6 * a)));
+    cv.restore();
+}
+
+/// Clears whatever surface is current to black (secondary screens during a game).
+pub fn clear_black(cv: &mut Cv, w: u32, h: u32) {
+    cv.set_size(w, h, 1.0);
+    cv.clear_rect(0, 0, w, h, Color::rgbf(0.0, 0.0, 0.0));
+    cv.flush();
+}

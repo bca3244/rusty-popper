@@ -12,6 +12,15 @@ pub struct Emulator {
     pub id: i64,
     pub name: String,
     pub media_dir: Option<PathBuf>,
+    /// Folder holding the table files (DirGames).
+    pub games_dir: Option<PathBuf>,
+    pub roms_dir: Option<PathBuf>,
+    /// The emulator's own folder ([DIREMU] in scripts).
+    pub launch_dir: Option<PathBuf>,
+    pub launch_script: String,
+    pub post_script: String,
+    /// Screen numbers (Popper slots) that keep showing media while a game runs.
+    pub keep_displays: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +33,11 @@ pub struct Game {
     pub manufacturer: Option<String>,
     pub year: Option<i64>,
     pub players: Option<i64>,
+    pub rom: Option<String>,
+    pub alt_exe: Option<String>,
+    /// LaunchCustomVar ([CUSTOM1] in scripts), CUSTOM2, CUSTOM3.
+    pub custom: [Option<String>; 3],
+    pub alt_mode: Option<String>,
 }
 
 /// One row of PinUPFunctions: a menu action and its keyboard / joystick binding.
@@ -75,12 +89,20 @@ impl PopperDb {
     pub fn emulators(&self) -> Result<Vec<Emulator>> {
         let mut st = self
             .conn
-            .prepare("SELECT EMUID, EmuName, DirMedia FROM Emulators WHERE Visible = 1 ORDER BY EMUID")?;
+            .prepare("SELECT EMUID, EmuName, DirMedia, DirGames, DirRoms, EmuLaunchDir, LaunchScript, PostScript, KeepDisplays FROM Emulators WHERE Visible = 1 ORDER BY EMUID")?;
         let rows = st.query_map([], |r| {
             Ok(Emulator {
                 id: r.get(0)?,
                 name: r.get(1)?,
-                media_dir: r.get::<_, Option<String>>(2)?.map(PathBuf::from),
+                media_dir: opt_text(r.get(2)?).map(PathBuf::from),
+                games_dir: opt_text(r.get(3)?).map(PathBuf::from),
+                roms_dir: opt_text(r.get(4)?).map(PathBuf::from),
+                launch_dir: opt_text(r.get(5)?).map(PathBuf::from),
+                launch_script: opt_text(r.get(6)?).unwrap_or_default(),
+                post_script: opt_text(r.get(7)?).unwrap_or_default(),
+                keep_displays: opt_text(r.get(8)?)
+                    .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+                    .unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -89,7 +111,7 @@ impl PopperDb {
     pub fn games(&self) -> Result<Vec<Game>> {
         let mut st = self.conn.prepare(
             "SELECT GameID, EMUID, GameName, COALESCE(GameDisplay, GameName), GameFileName,
-                    Manufact, GameYear, NumPlayers
+                    Manufact, GameYear, NumPlayers, ROM, ALTEXE, LaunchCustomVar, CUSTOM2, CUSTOM3, AltRunMode
              FROM Games WHERE Visible = 1 ORDER BY COALESCE(GameDisplay, GameName) COLLATE NOCASE",
         )?;
         let rows = st.query_map([], |r| {
@@ -102,6 +124,10 @@ impl PopperDb {
                 manufacturer: opt_text(r.get(5)?),
                 year: opt_int(r.get(6)?),
                 players: opt_int(r.get(7)?),
+                rom: opt_text(r.get(8)?),
+                alt_exe: opt_text(r.get(9)?),
+                custom: [opt_text(r.get(10)?), opt_text(r.get(11)?), opt_text(r.get(12)?)],
+                alt_mode: opt_text(r.get(13)?),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
