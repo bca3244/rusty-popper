@@ -561,9 +561,18 @@ fn state_path() -> PathBuf {
     exe_dir().join("last-playlist.txt")
 }
 
+/// The app icon (copper-ring RP wheel) for the windows' title/Alt-Tab icon.
+fn window_icon() -> Option<winit::window::Icon> {
+    static PNG: &[u8] = include_bytes!("../assets/rusty-popper-256.png");
+    let img = image::load_from_memory(PNG).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
+}
+
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
     Window::default_attributes()
         .with_title(format!("Rusty Popper {:?}", s.slot))
+        .with_window_icon(window_icon())
         .with_decorations(false)
         .with_resizable(false)
         .with_position(PhysicalPosition::new(s.x, s.y))
