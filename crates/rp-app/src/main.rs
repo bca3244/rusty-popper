@@ -279,6 +279,8 @@ struct Playing {
     phase: std::sync::Arc<std::sync::atomic::AtomicU8>,
     /// When the game was seen to exit (restarts the screen's animation).
     exiting_since: Option<Instant>,
+    /// Screens not in KeepDisplays are paused (and black) only while the game itself runs.
+    others_paused: bool,
 }
 
 struct ExitMenu {
@@ -509,6 +511,16 @@ impl App {
                         p.exiting_since = Some(Instant::now());
                     }
                     let t = p.exiting_since.unwrap_or(p.since).elapsed().as_secs_f32();
+                    let want_paused = phase == Phase::Playing;
+                    if want_paused != p.others_paused {
+                        p.others_paused = want_paused;
+                        if let Some(g) = self.gfx.as_ref() {
+                            let keep = &self.items[p.index].emu.keep_displays;
+                            for o in g.outs.iter().filter(|o| !keep.contains(&(o.screen.slot as u32))) {
+                                let _ = o.player.set_pause(want_paused);
+                            }
+                        }
+                    }
                     // Animate while the table loads or closes; barely tick behind the game.
                     let every = match phase {
                         Phase::Playing => 1000,
@@ -618,11 +630,11 @@ impl App {
         let Some(g) = self.gfx.as_mut() else { return };
         let item = &self.items[index];
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: item.emu.clone(), game: item.game.clone() };
-        // Screens Popper keeps during play (KeepDisplays) carry on; the rest pause and go black.
-        for o in &g.outs {
-            let keep = item.emu.keep_displays.contains(&(o.screen.slot as u32));
-            if !keep {
-                let _ = o.player.set_pause(true);
+        // Make sure every screen shows this game's media while it loads.
+        if g.shown != index {
+            g.shown = index;
+            for o in &g.outs {
+                o.show(item.media(o.screen.slot).as_deref());
             }
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -634,7 +646,7 @@ impl App {
                 let _ = tx.send(job.run(&worker_phase));
             })
             .expect("spawn game thread");
-        self.playing = Some(Playing { rx, index, since: Instant::now(), phase, exiting_since: None });
+        self.playing = Some(Playing { rx, index, since: Instant::now(), phase, exiting_since: None, others_paused: false });
     }
 
     /// Brings the menu back after a game: screens, video and focus.
@@ -651,21 +663,26 @@ impl App {
         g.last = Instant::now();
     }
 
-    /// One frame while a game is running: black screens except the ones the
-    /// emulator keeps, and the launch screen on the playfield.
+    /// One frame while a game is loading, running or closing: the launch /
+    /// exit screen on the playfield and the game's media (or black) elsewhere.
     fn render_launching(&mut self, index: usize, phase: rp_launch::Phase, t: f32) -> Result<()> {
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
         let keep = &self.items[index].emu.keep_displays;
         for o in &g.outs {
             o.player.poll_events();
         }
-        for o in g.outs.iter().skip(1) {
+        // While loading and exiting every screen shows the game's media; while
+        // the game runs, screens it doesn't keep go black behind it.
+        // mpv draws first: femtovg leaves GL state that mpv's renderer trips on.
+        let black = |o: &ScreenOut| phase == rp_launch::Phase::Playing && !keep.contains(&(o.screen.slot as u32));
+        for o in g.outs.iter().skip(1).filter(|o| !black(o)) {
             g.context.make_current(&o.surface)?;
-            if keep.contains(&(o.screen.slot as u32)) {
-                o.player.render(o.screen.width, o.screen.height);
-            } else {
-                wheel::clear_black(&mut g.canvas, o.screen.width as u32, o.screen.height as u32);
-            }
+            o.player.render(o.screen.width, o.screen.height);
+            o.surface.swap_buffers(&g.context)?;
+        }
+        for o in g.outs.iter().skip(1).filter(|o| black(o)) {
+            g.context.make_current(&o.surface)?;
+            wheel::clear_black(&mut g.canvas, o.screen.width as u32, o.screen.height as u32);
             o.surface.swap_buffers(&g.context)?;
         }
         let pf = &g.outs[0];
