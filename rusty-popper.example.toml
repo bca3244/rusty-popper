@@ -51,3 +51,8 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # enabled = true
 # volume = 70
 # dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'
+
+[update]
+# Look for a newer release on GitHub at startup; install from Exit -> Options.
+# check = true
+# repo = 'bca3244/rusty-popper'

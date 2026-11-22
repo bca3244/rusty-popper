@@ -105,6 +105,22 @@ impl App {
         }
     }
 
+    /// The Options row for updates, describing where things stand.
+    pub(crate) fn update_label(&self) -> String {
+        use updater::Status::*;
+        let current = env!("CARGO_PKG_VERSION");
+        match self.updater.status() {
+            Off => format!("Check for updates (v{current})"),
+            Checking => "Checking for updates…".into(),
+            UpToDate => format!("Up to date (v{current})"),
+            Available(r) => format!("Install update v{}", r.version),
+            Downloading { version, percent } => format!("Downloading v{version}… {percent}%"),
+            Staged { version, .. } => format!("Installing v{version}…"),
+            Restarting(version) => format!("Restarting into v{version}…"),
+            Failed(why) => format!("Update failed: {}", why.chars().take(40).collect::<String>()),
+        }
+    }
+
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
@@ -117,6 +133,7 @@ impl App {
             format!("Video volume: {}%", self.volume),
             format!("Sound effects: {}", onoff(self.sounds.enabled)),
             format!("Effects volume: {}%", self.sounds.volume),
+            self.update_label(),
             "Back".to_string(),
         ]
     }
@@ -135,6 +152,14 @@ impl App {
                 }
             }
             5 => self.sounds.enabled = !self.sounds.enabled,
+            7 => {
+                match self.updater.status() {
+                    updater::Status::Available(rel) => self.updater.download(rel),
+                    updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
+                    _ => self.updater.check(),
+                }
+                return;
+            }
             6 => {
                 let v = if self.sounds.volume >= 100 { 0 } else { (self.sounds.volume / 10 + 1) * 10 };
                 self.sounds.set_volume(v);

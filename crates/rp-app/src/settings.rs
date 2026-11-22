@@ -132,6 +132,26 @@ pub struct PathSettings {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateSettings {
+    /// Look for a newer release on GitHub at startup.
+    #[serde(default = "yes")]
+    pub check: bool,
+    /// GitHub repository the releases come from.
+    #[serde(default = "default_repo")]
+    pub repo: String,
+}
+
+fn default_repo() -> String {
+    "bca3244/rusty-popper".into()
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        UpdateSettings { check: true, repo: default_repo() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SoundSettings {
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -198,6 +218,8 @@ pub struct Settings {
     pub paths: PathSettings,
     #[serde(default)]
     pub sound: SoundSettings,
+    #[serde(default)]
+    pub update: UpdateSettings,
 }
 
 impl Settings {
