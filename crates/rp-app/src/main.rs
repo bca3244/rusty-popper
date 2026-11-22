@@ -15,6 +15,7 @@
 #![windows_subsystem = "windows"]
 
 mod assets;
+mod discover;
 mod input;
 mod library;
 mod logging;
@@ -59,7 +60,6 @@ use winit::window::{Window, WindowId};
 const LIVE: &[Slot] = &[Slot::Topper, Slot::Dmd, Slot::BackGlass, Slot::PlayField, Slot::FullDmd];
 
 /// Where Popper installs by default.
-const DEFAULT_POPPER_DIR: &str = r"C:\vPinball\PinUPSystem";
 
 /// Plays shorter than this (a table that failed to load, a mis-press) aren't
 /// counted in Popper's statistics.
@@ -176,6 +176,13 @@ fn main() {
         Ok(()) => 0,
         Err(e) => {
             log::error!("{e:#}");
+            log::logger().flush();
+            // Started at logon there's no console, so say what went wrong on
+            // screen rather than leaving a bare desktop.
+            win::show_error(
+                "Rusty Popper couldn't start",
+                &format!("{e:#}\n\nMore detail is in rusty-popper.log next to rusty-popper.exe."),
+            );
             1
         }
     };
@@ -189,7 +196,15 @@ fn run() -> Result<()> {
     log::info!("Rusty Popper {} starting", env!("CARGO_PKG_VERSION"));
     let settings = Settings::load(&exe_dir().join("rusty-popper.toml"));
     let style = args.wheel.unwrap_or(settings.wheel.style);
-    let popper = args.popper.clone().or(settings.paths.popper_dir.clone()).unwrap_or_else(|| PathBuf::from(DEFAULT_POPPER_DIR));
+    let found = discover::find_popper(args.popper.clone(), settings.paths.popper_dir.clone())?;
+    let popper = found.dir;
+    if found.searched {
+        // Remember it so the next start goes straight there.
+        match settings::save_popper_dir(&exe_dir().join("rusty-popper.toml"), &popper) {
+            Ok(()) => log::info!("Saved popper_dir = {} to rusty-popper.toml", popper.display()),
+            Err(e) => log::warn!("Couldn't save popper_dir to rusty-popper.toml: {e:#}"),
+        }
+    }
 
     rp_launch::remove_stale_temp_files();
     let db_seen = db_mtime(&popper);
