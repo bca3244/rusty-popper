@@ -222,6 +222,10 @@ fn main() -> Result<()> {
         menu: None,
         popper_dir: args.popper.clone(),
         playing: None,
+        stats: std::sync::Arc::new(std::sync::Mutex::new(db::StatsWriter::new(
+            &args.popper.join("PUPDatabase.db"),
+            &exe_dir().join("backups"),
+        ))),
     };
     event_loop.run_app(&mut app)?;
     if let Some(e) = app.error {
@@ -313,6 +317,8 @@ struct App {
     popper_dir: PathBuf,
     /// The game currently running, if any: finishes when the worker sends.
     playing: Option<Playing>,
+    /// Records plays in Popper's GamesStats (shared with the game thread).
+    stats: std::sync::Arc<std::sync::Mutex<db::StatsWriter>>,
 }
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
@@ -640,10 +646,23 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         let phase = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         let worker_phase = phase.clone();
+        let stats = self.stats.clone();
+        let game_id = item.game.id;
         std::thread::Builder::new()
             .name("game".into())
             .spawn(move || {
-                let _ = tx.send(job.run(&worker_phase));
+                let result = job.run(&worker_phase);
+                if let Ok(rp_launch::Outcome::Finished { secs }) = &result {
+                    let recorded = stats
+                        .lock()
+                        .map_err(|_| anyhow!("stats lock poisoned"))
+                        .and_then(|mut s| s.record_play(game_id, *secs));
+                    match recorded {
+                        Ok(()) => println!("Recorded play of game {game_id} ({secs}s)"),
+                        Err(e) => eprintln!("Couldn't record play stats: {e:#}"),
+                    }
+                }
+                let _ = tx.send(result);
             })
             .expect("spawn game thread");
         self.playing = Some(Playing { rx, index, since: Instant::now(), phase, exiting_since: None, others_paused: false });
