@@ -1,88 +1,174 @@
 # Rusty Popper
 
-A fast, sleek alternate frontend for [PinUP Popper](https://www.nailbuster.com/wikipinup/) on virtual pinball cabinets, written in Rust.
+A fast, sleek alternate front end for [PinUP Popper](https://www.nailbuster.com/wikipinup/) on virtual pinball cabinets, written in Rust.
 
-Rusty Popper aims to replace **PinUpMenu.exe** only. It reuses everything Popper already manages, so your existing setup keeps working and you can switch back at any time.
+Rusty Popper replaces **PinUpMenu.exe** only. Everything else stays as Popper set it up: your tables, media, playlists, button setup, emulator launch scripts, PinUP Player, B2S and DOF. You can switch back to Popper at any time.
 
-## What it reuses from Popper
+<!-- Demo video: drag rusty-popper-demo-github.mp4 here in GitHub's editor to embed it. -->
 
-| Popper piece | How Rusty Popper uses it |
+## Features
+
+- **Two wheel styles:** an arc wheel and a cover flow with sliding videos. Switch in Options.
+- **Every cabinet screen:** playfield, backglass, DMD, FullDMD and topper all follow the selected game, using Popper's own screen layout and playfield rotation.
+- **Launches through Popper's scripts:** VPX, Future Pinball and others start exactly as they do in Popper. "Launching" and "Exiting" screens mean the desktop never shows.
+- **Playlists as wheels:** Popper's playlists sit on the wheel where it wraps from the last game back to the first.
+- **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, and **menu sounds** from Popper's own sound set.
+- **Play statistics** written back to Popper, so "Most Played" keeps working.
+- **Updates itself:** it tells you when a new release is out and installs it from the Options menu, with automatic rollback.
+
+## Requirements
+
+- Windows 10 or 11, 64-bit
+- PinUP Popper installed and working (Rusty Popper reads its database and media)
+- A graphics card with OpenGL 3.3 or newer
+
+## Installation
+
+1. **Download** the latest `rusty-popper-vX-windows-x64.zip` from the [Releases page](https://github.com/bca3244/rusty-popper/releases/latest).
+2. **Unzip** the `rusty-popper` folder somewhere permanent, for example `C:\vPinball\RustyPopper`. It contains:
+   - `rusty-popper.exe`, the front end
+   - `libmpv-2.dll`, the video player library it needs (keep it next to the exe)
+   - `rusty-popper.toml`, your settings, and `rusty-popper.example.toml`, which lists every option
+   - `Enable-RustyPopperStartup.ps1` and `Disable-RustyPopperStartup.ps1`, for starting at boot
+3. **Close Popper** if it's running, then **run `rusty-popper.exe`** to try it.
+   - It finds Popper by itself: the default `C:\vPinball\PinUPSystem` first, then where Windows has PinUpPlayer registered, then the usual install folders on every drive. Whatever it finds is saved to `rusty-popper.toml`.
+   - If it can't start (Popper not found, `libmpv-2.dll` missing), it shows a message saying why. More detail is in `rusty-popper.log` next to the exe.
+4. **Start it at boot (optional).** Right-click `Enable-RustyPopperStartup.ps1` and choose *Run with PowerShell*. It asks for administrator rights. It creates a "Run Rusty Popper" logon task and disables Popper's own "Run Pinup Popper" task, so only one front end starts.
+
+### Going back to Popper
+
+Run `Disable-RustyPopperStartup.ps1` the same way. It turns Rusty Popper's logon task off and Popper's back on. Nothing is deleted, so you can switch again whenever you like. Add `-WhatIf` to either script to see what it would do without changing anything.
+
+## Using it
+
+Rusty Popper uses the buttons you set up in **Popper's controller setup**, so your cabinet works straight away. Keyboard keys work too.
+
+| Popper function | Usually | Keyboard | What it does |
+|---|---|---|---|
+| Game Prior / Game Next | Flippers | ← / → or Left / Right Shift | Previous / next game |
+| Page Prior / Page Next | Magna-saves | ↑ / ↓ or Left / Right Ctrl | Jump to the previous / next letter |
+| Game Start | Start | Enter | Launch the game, or open a playlist wheel |
+| Game Info/Flyer | Info | I | Show the game's info card (any button closes it) |
+| Game Help | | H | Show the game's help card |
+| System Menu / Exit Emulators | Exit | Esc | Open the exit menu |
+| List Next / List Prior | | P | Jump to the playlist wheels |
+| | | W | Switch between arc and cover flow |
+| | | Q | Quit at once (can be turned off) |
+
+**While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper.
+
+**Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. The **All games** wheel takes you back. Rusty Popper remembers the last playlist you used.
+
+**The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart computer* and *Shut down computer*. It always opens on *Back to games*, so a stray press can't power anything off.
+
+**Options** (Exit → Options) change things on the spot and save them:
+
+- Wheel style (arc or cover flow)
+- Attract mode on or off, how long until it starts, and how long it stays on each game
+- Video volume
+- Sound effects on or off, and their volume
+- Install update / check for updates
+
+## Updating
+
+When Rusty Popper starts, it checks GitHub for a newer release. If there is one, a small **UPDATE vX AVAILABLE** note appears in the corner of the wheel.
+
+To install it, go to **Exit → Options → Install update vX**. Rusty Popper then:
+
+1. downloads the release
+2. checks it against the SHA-256 checksum GitHub publishes for it, and refuses it if they don't match
+3. replaces its files, keeping the old ones in `rollback\` (your `rusty-popper.toml` is never touched)
+4. restarts into the new version
+
+If the new version fails to start, the old files are put back and the old version starts again automatically. Updates never install during a game.
+
+To turn the startup check off, set `check = false` under `[update]` in `rusty-popper.toml`. To update by hand instead, download the new zip and copy `rusty-popper.exe` (and `libmpv-2.dll`, if it changed) over the old ones, keeping your own `rusty-popper.toml`.
+
+## Settings
+
+`rusty-popper.toml` next to the exe holds your settings. Every setting is optional, and most can be changed in Options instead. `rusty-popper.example.toml` documents them all:
+
+| Section | What's in it |
 |---|---|
-| `PUPDatabase.db` | Read via SQLite (games, emulators, playlists, button setup); play statistics written back |
-| `POPMedia\` tree | Playfield / backglass / DMD / topper / wheel media per game |
-| `PinUpPlayer.ini` | Screen layout: which monitor and rectangle each display uses |
-| Emulator `LaunchScript` / `PostScript` | Run as-is to start and close tables (VPX, FP, FX, etc.) |
-| PinUP Player, B2S, DOF | Untouched, keep doing their jobs |
+| `[wheel]` | `style`: `"arc"` or `"flow"` |
+| `[playfield]` | `ui_rotation`: turn the menu to face the player (default: Popper's own setting) |
+| `[input]` | Extra joystick buttons, whether buttons need focus, the Q quit key |
+| `[launch]` | Extra helper programs to ignore when deciding whether a game is still running |
+| `[paths]` | `popper_dir` (found automatically) and `mpv_dll` |
+| `[attract]` | `enabled`, `idle_secs`, `interval_secs` |
+| `[audio]` | `volume` for the playfield video |
+| `[sound]` | Menu sound effects: `enabled`, `volume`, `dir` |
+| `[update]` | `check` for updates at startup, and the `repo` they come from |
 
-## How it's built
+## What it changes
 
-- **Windowing / GL:** `winit` + `glutin`, one borderless window per cabinet screen, sharing one GL context
-- **Video:** `libmpv` render API (hardware decode, seamless looping), drawn into textures so videos can slide
-- **2D / text:** `femtovg`
-- **Database:** `rusqlite`, reading a consistent snapshot of `PUPDatabase.db`
-- **Input:** Popper's own key and joystick button setup (`PinUPFunctions`), read through winit and winmm
+- **Popper's database:** only play statistics (last played, play count, time played), after plays of 20 seconds or more. The database is backed up to `backups\` next to the exe before the first write of each session, and the newest 10 backups are kept.
+- **Next to the exe:**
+  - `rusty-popper.log`, for troubleshooting
+  - `rusty-popper.toml`, when you change Options
+  - `last-playlist.txt`
+  - during updates, `update\` and `rollback\`
 
-## Workspace layout
+Nothing else of Popper's is changed. Rusty Popper notices when the database changes (tables added in Popper's setup or VPin Studio, playlists edited) and picks the changes up without a restart.
 
-```
-crates/
-  rp-app/     binary: rusty-popper
-    main.rs     startup, arguments, the event loop
-    render.rs   windows, GL, players, drawing a frame of the menu
-    menu.rs     what the buttons do: browsing, playlists, exit/options, attract mode
-    session.rs  a game session: launch, the Launching/Exiting screens, the exit button
-    reload.rs   following database changes, keeping the keyboard focus
-    library.rs  games and playlists as read from Popper
-    wheel.rs    the arc wheel and cover flow
-  rp-db/      PUPDatabase.db access
-  rp-config/  PinUpPlayer.ini + POPMedia path resolution
-  rp-launch/  emulator launch/post scripts, process tracking
-```
+## Troubleshooting
 
-## Building
+- **Nothing happens, or a message says it couldn't start:** read `rusty-popper.log` next to the exe. The usual causes are:
+  - Popper isn't installed where it looked: set `popper_dir` under `[paths]`.
+  - `libmpv-2.dll` isn't next to the exe.
+- **A game launches but Rusty Popper doesn't come back:** a helper program from the emulator's folder may still be running. Add it to `ignore_processes` under `[launch]`.
+- **Buttons do the wrong thing:** they come from Popper's controller setup, so fix them there (PinUP Popper Setup → Controller Setup).
+
+## Building from source
 
 ```
 cargo build --release
 cargo test
 ```
 
-The app is Windows-only. It needs `libmpv-2.dll` from the `mpv-dev-x86_64` build of zhongfly/mpv-winbuild at run time: put it next to the exe, set `[paths] mpv_dll` in `rusty-popper.toml`, set the `RUSTY_POPPER_MPV` environment variable, or pass `--mpv PATH`. The DLL is loaded at run time, so building needs no import library.
+The app is Windows-only and needs Rust stable with the MSVC toolchain. At run time it needs `libmpv-2.dll` from the `mpv-dev-x86_64` build of zhongfly/mpv-winbuild. The DLL is loaded at run time, so building needs no import library. You can point to it with `[paths] mpv_dll`, the `RUSTY_POPPER_MPV` environment variable, or `--mpv PATH`.
 
-## Running
+Useful command-line options:
 
 ```
-rusty-popper                     # the menu
-rusty-popper --list              # list the games it found
-rusty-popper --dry-run --game "addams family"
+rusty-popper --list                                  # list the games it found
+rusty-popper --dry-run --game "addams family"        # check setup without opening windows
 rusty-popper --print-launch --game "addams family"   # show the filled-in launch scripts
-rusty-popper --game "addams family" --seconds 60
+rusty-popper --game "addams family" --seconds 60     # start on a game, quit after a minute
+rusty-popper --popper D:\PinUPSystem                 # use a specific Popper folder
 ```
 
-The exe is a windowed program, so a terminal doesn't wait for it and its output can arrive after the next prompt. Use `start /wait rusty-popper --list` (cmd) or `rusty-popper --list | Out-Host` (PowerShell) to wait, or read `rusty-popper.log` next to the exe, which gets everything that is printed.
+The exe is a windowed program, so a terminal doesn't wait for it. Use `start /wait rusty-popper --list` (cmd) or `rusty-popper --list | Out-Host` (PowerShell), or read `rusty-popper.log`.
 
-Popper's folder defaults to `C:\vPinball\PinUPSystem`; change it with `--popper DIR` or `[paths] popper_dir`. Copy `rusty-popper.example.toml` next to the exe as `rusty-popper.toml` for the other settings; most can also be changed in the menu under Exit, Options.
+### How it's built
 
-Browse with the buttons Popper has bound (or the arrow keys), Start launches, and the exit button opens the exit menu. While a game runs, Popper's **Exit Emulators** button closes it by running the emulator's close script, like Popper does.
+- **Windowing / GL:** `winit` and `glutin`, with one borderless window per cabinet screen sharing one GL context
+- **Video:** the `libmpv` render API (hardware decode, seamless looping), drawn into textures so videos can slide
+- **2D and text:** `femtovg`
+- **Database:** `rusqlite`, reading a consistent snapshot of `PUPDatabase.db`
+- **Input:** Popper's own key and joystick setup (`PinUPFunctions`), read through winit and winmm
+- **Updates:** `ureq` (rustls) against the GitHub releases API, `sha2` to verify, `zip` to unpack
 
-## What it writes
-
-- **Popper's database:** only play statistics (`GamesStats`: last played, play count, time played), after plays of 20 seconds or more. The database is backed up to `backups\` next to the exe before the first write of a session (the newest 10 are kept).
-- **Next to the exe:** `rusty-popper.log` (what happened, for troubleshooting), `rusty-popper.toml` (when you change Options) and `last-playlist.txt`.
-
-Nothing else of Popper's is changed. Rusty Popper notices when the database changes (tables added in Popper's setup or VPin Studio, playlists edited) and picks the changes up without a restart.
-
-Windows is the target platform. Rusty Popper is not affiliated with or endorsed by nailbuster / PinUP Popper.
-
-## Starting at boot
-
-Two PowerShell scripts in `scripts\` (also included next to the exe in the release zip) switch which front end starts at logon:
-
-```powershell
-.\Enable-RustyPopperStartup.ps1    # start Rusty Popper at logon, disable "Run Pinup Popper"
-.\Disable-RustyPopperStartup.ps1   # go back to Pinup Popper
+```
+crates/
+  rp-app/     binary: rusty-popper
+    main.rs      startup, arguments, the event loop
+    render.rs    windows, GL, players, drawing a frame of the menu
+    menu.rs      what the buttons do: browsing, playlists, cards, exit/options, attract mode
+    session.rs   a game session: launch, the Launching/Exiting screens, the exit button
+    reload.rs    following database changes, keeping the keyboard focus
+    library.rs   games and playlists as read from Popper
+    wheel.rs     the arc wheel and cover flow
+    discover.rs  finding Popper
+    overlay.rs   Game Info / Help cards
+    sfx.rs       menu sounds
+    updater.rs   update check, install and rollback
+  rp-db/      PUPDatabase.db access
+  rp-config/  PinUpPlayer.ini and POPMedia path resolution
+  rp-launch/  emulator launch/post scripts, process tracking
 ```
 
-Both scripts ask for administrator rights, which changing Popper's task needs. Nothing is deleted, and `-WhatIf` shows what a script would do without changing anything.
+Rusty Popper is not affiliated with or endorsed by nailbuster / PinUP Popper.
 
 ## License
 
