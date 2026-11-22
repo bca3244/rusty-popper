@@ -302,9 +302,9 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
     fill_rect(cv, 0.0, y0 + 182.0, vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
     slot_glow(cv, cx, y0, 420.0, 230.0, entry_hue(sel), 0.9);
 
-    // Portrait shows three covers each side, landscape five.
+    // Portrait shows two covers each side, landscape four.
     // The outermost cover fades in/out as the shelf moves instead of popping.
-    let shown = if vw < DESIGN_W * 0.75 { 3.0 } else { 5.0 };
+    let shown = if vw < DESIGN_W * 0.75 { 2.0 } else { 4.0 };
     for (i, d) in visible_items(f.wheel.pos, f.order.len(), shown + 1.0) {
         let e = f.entry(i);
         let a = d.abs();
