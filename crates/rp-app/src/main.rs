@@ -272,6 +272,12 @@ struct Gfx {
 /// of Start never reboots or shuts down the cabinet.
 const EXIT_MENU: &[&str] = &["Back to games", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
 
+struct Playing {
+    rx: Receiver<Result<rp_launch::Outcome>>,
+    index: usize,
+    since: Instant,
+}
+
 struct ExitMenu {
     selected: usize,
     opened: Instant,
@@ -301,7 +307,7 @@ struct App {
     menu: Option<ExitMenu>,
     popper_dir: PathBuf,
     /// The game currently running, if any: finishes when the worker sends.
-    playing: Option<Receiver<Result<rp_launch::Outcome>>>,
+    playing: Option<Playing>,
 }
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
@@ -474,9 +480,11 @@ impl App {
     }
 
     fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
-        // While a game runs our windows are hidden: just wait for it to end.
-        if let Some(rx) = &self.playing {
-            match rx.try_recv() {
+        // While a game runs, keep our windows up behind it (black, with a
+        // "Launching" screen on the playfield) so the desktop never shows.
+        let mut launching: Option<(usize, f32)> = None;
+        if let Some(p) = &self.playing {
+            match p.rx.try_recv() {
                 Ok(result) => {
                     match result {
                         Ok(outcome) => println!("Back from game ({outcome:?})"),
@@ -484,17 +492,24 @@ impl App {
                     }
                     self.playing = None;
                     self.return_from_game();
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(100)));
-                    return Ok(());
+                    el.set_control_flow(ControlFlow::Poll);
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.playing = None;
                     self.return_from_game();
+                    el.set_control_flow(ControlFlow::Poll);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let t = p.since.elapsed().as_secs_f32();
+                    // Animate while the table loads, then barely tick behind the game.
+                    let every = if t < 15.0 { 33 } else { 1000 };
+                    el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(every)));
+                    launching = Some((p.index, t));
                 }
             }
-            el.set_control_flow(ControlFlow::Poll);
+        }
+        if let Some((index, t)) = launching {
+            return self.render_launching(index, t);
         }
         let mut actions = Vec::new();
         {
@@ -582,7 +597,7 @@ impl App {
         Ok(())
     }
 
-    /// Hides the menu, pauses all video and runs the selected game's
+    /// Shows the launch screen, pauses video and runs the selected game's
     /// emulator scripts on a worker thread.
     fn launch(&mut self, index: usize) {
         if self.playing.is_some() {
@@ -591,9 +606,12 @@ impl App {
         let Some(g) = self.gfx.as_mut() else { return };
         let item = &self.items[index];
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: item.emu.clone(), game: item.game.clone() };
+        // Screens Popper keeps during play (KeepDisplays) carry on; the rest pause and go black.
         for o in &g.outs {
-            let _ = o.player.set_pause(true);
-            o.window.set_visible(false);
+            let keep = item.emu.keep_displays.contains(&(o.screen.slot as u32));
+            if !keep {
+                let _ = o.player.set_pause(true);
+            }
         }
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
@@ -602,7 +620,7 @@ impl App {
                 let _ = tx.send(job.run());
             })
             .expect("spawn game thread");
-        self.playing = Some(rx);
+        self.playing = Some(Playing { rx, index, since: Instant::now() });
     }
 
     /// Brings the menu back after a game: screens, video and focus.
@@ -613,11 +631,46 @@ impl App {
             let _ = o.player.set_pause(false);
             o.show(item.media(o.screen.slot).as_deref());
         }
-        g.outs[0].window.set_visible(true);
         g.outs[0].window.focus_window();
         // Buttons still held from the game (e.g. Exit) must not fire in the menu.
         g.joysticks.swallow_held(&self.bindings);
         g.last = Instant::now();
+    }
+
+    /// One frame while a game is running: black screens except the ones the
+    /// emulator keeps, and the launch screen on the playfield.
+    fn render_launching(&mut self, index: usize, t: f32) -> Result<()> {
+        let Some(g) = self.gfx.as_mut() else { return Ok(()) };
+        let keep = &self.items[index].emu.keep_displays;
+        for o in &g.outs {
+            o.player.poll_events();
+        }
+        for o in g.outs.iter().skip(1) {
+            g.context.make_current(&o.surface)?;
+            if keep.contains(&(o.screen.slot as u32)) {
+                o.player.render(o.screen.width, o.screen.height);
+            } else {
+                wheel::clear_black(&mut g.canvas, o.screen.width as u32, o.screen.height as u32);
+            }
+            o.surface.swap_buffers(&g.context)?;
+        }
+        let pf = &g.outs[0];
+        g.context.make_current(&pf.surface)?;
+        let (w, h) = (pf.screen.width, pf.screen.height);
+        g.canvas.set_size(w as u32, h as u32, 1.0);
+        g.canvas.save();
+        let rot = (pf.screen.rotation + self.ui_rotation).rem_euclid(360);
+        let (lw, lh) = if rot % 180 == 0 { (w, h) } else { (h, w) };
+        if rot != 0 {
+            g.canvas.translate(w as f32 / 2.0, h as f32 / 2.0);
+            g.canvas.rotate((rot as f32).to_radians());
+            g.canvas.translate(-(lw as f32) / 2.0, -(lh as f32) / 2.0);
+        }
+        wheel::draw_launch(&mut g.canvas, lw as f32, lh as f32, &g.entries[index], &self.items[index].emu_name, t, &g.fonts);
+        g.canvas.restore();
+        g.canvas.flush();
+        pf.surface.swap_buffers(&g.context)?;
+        Ok(())
     }
 
     fn shutdown(&mut self) {

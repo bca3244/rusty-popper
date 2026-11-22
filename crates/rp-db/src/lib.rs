@@ -19,6 +19,8 @@ pub struct Emulator {
     pub launch_dir: Option<PathBuf>,
     pub launch_script: String,
     pub post_script: String,
+    /// Screen numbers (Popper slots) that keep showing media while a game runs.
+    pub keep_displays: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,7 +89,7 @@ impl PopperDb {
     pub fn emulators(&self) -> Result<Vec<Emulator>> {
         let mut st = self
             .conn
-            .prepare("SELECT EMUID, EmuName, DirMedia, DirGames, DirRoms, EmuLaunchDir, LaunchScript, PostScript FROM Emulators WHERE Visible = 1 ORDER BY EMUID")?;
+            .prepare("SELECT EMUID, EmuName, DirMedia, DirGames, DirRoms, EmuLaunchDir, LaunchScript, PostScript, KeepDisplays FROM Emulators WHERE Visible = 1 ORDER BY EMUID")?;
         let rows = st.query_map([], |r| {
             Ok(Emulator {
                 id: r.get(0)?,
@@ -98,6 +100,9 @@ impl PopperDb {
                 launch_dir: opt_text(r.get(5)?).map(PathBuf::from),
                 launch_script: opt_text(r.get(6)?).unwrap_or_default(),
                 post_script: opt_text(r.get(7)?).unwrap_or_default(),
+                keep_displays: opt_text(r.get(8)?)
+                    .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+                    .unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
