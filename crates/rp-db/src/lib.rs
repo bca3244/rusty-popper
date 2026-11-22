@@ -154,7 +154,11 @@ impl PopperDb {
     pub fn playlists(&self) -> Result<Vec<Playlist>> {
         let mut st = self.conn.prepare(
             "SELECT PlayListID, PlayName, PlayListType, PlayListSQL, Logo FROM PlayLists
-             WHERE Visible = 1 ORDER BY DisplayOrder, PlayListID",
+             WHERE Visible = 1
+               -- Skip Popper's root 'Home' list (PlayListParent -1): it is the menu
+               -- container in Popper, and 'All games' covers going back.
+               AND COALESCE(PlayListParent, 0) <> -1
+             ORDER BY DisplayOrder, PlayListID",
         )?;
         let rows = st.query_map([], |r| {
             Ok(Playlist {
