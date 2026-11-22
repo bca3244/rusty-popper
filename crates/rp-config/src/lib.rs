@@ -93,9 +93,24 @@ pub struct Screen {
 }
 
 pub fn read_screens(ini_path: &Path) -> Result<Vec<Screen>> {
-    let text = std::fs::read_to_string(ini_path)
-        .with_context(|| format!("reading {}", ini_path.display()))?;
-    let sections = parse_ini(&text);
+    let bytes = std::fs::read(ini_path).with_context(|| format!("reading {}", ini_path.display()))?;
+    Ok(screens_from_ini(&decode_ini(&bytes)))
+}
+
+/// INI files written by Windows tools may be UTF-8 (with or without a BOM),
+/// UTF-16 LE with a BOM, or ANSI. Section and key names are ASCII, so a lossy
+/// decode of anything else is enough.
+fn decode_ini(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = rest.chunks(2).filter(|c| c.len() == 2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn screens_from_ini(text: &str) -> Vec<Screen> {
+    let sections = parse_ini(text);
 
     let mut screens = Vec::new();
     for i in 0..=10u32 {
@@ -117,7 +132,7 @@ pub fn read_screens(ini_path: &Path) -> Result<Vec<Screen>> {
             volume: get("volume").unwrap_or(100),
         });
     }
-    Ok(screens)
+    screens
 }
 
 /// PinUpPlayer.ini stores rotation either as 0..3 quarter turns or as degrees.
@@ -151,4 +166,46 @@ fn parse_ini(text: &str) -> HashMap<String, HashMap<String, String>> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INI: &str = "[INFO]\r\nScreenXPos=0\r\nScreenYPos=0\r\nScreenWidth=1920\r\nScreenHeight=1080\r\n\r\n; comment\r\n[info3]\r\nscreenxpos = -1080\r\nSCREENYPOS=0\r\nScreenWidth=1080\r\nScreenHeight=1920\r\nScreenRotation=3\r\nvolume=40\r\n[INFO5]\r\nScreenXPos=x\r\n";
+
+    fn check(screens: &[Screen]) {
+        assert_eq!(screens.len(), 2); // INFO5 has no usable rectangle
+        assert_eq!(screens[0].slot, Slot::Topper);
+        assert_eq!((screens[0].rotation, screens[0].volume), (0, 100));
+        let pf = &screens[1];
+        assert_eq!(pf.slot, Slot::PlayField);
+        assert_eq!((pf.x, pf.width, pf.height, pf.rotation, pf.volume), (-1080, 1080, 1920, 270, 40));
+    }
+
+    #[test]
+    fn parses_screens_case_insensitively() {
+        check(&screens_from_ini(INI));
+    }
+
+    #[test]
+    fn decodes_bom_utf16_and_ansi() {
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend(INI.as_bytes());
+        check(&screens_from_ini(&decode_ini(&utf8_bom)));
+
+        let mut utf16 = vec![0xFF, 0xFE];
+        utf16.extend(INI.encode_utf16().flat_map(u16::to_le_bytes));
+        check(&screens_from_ini(&decode_ini(&utf16)));
+
+        // A stray ANSI byte (e.g. an accented comment) must not fail the read.
+        let mut ansi = b"; caf\xE9\r\n".to_vec();
+        ansi.extend(INI.as_bytes());
+        check(&screens_from_ini(&decode_ini(&ansi)));
+    }
+
+    #[test]
+    fn rotation_accepts_quarter_turns_and_degrees() {
+        assert_eq!([0, 1, 2, 3, 90, 180, 270, 45].map(rotation_degrees), [0, 90, 180, 270, 90, 180, 270, 0]);
+    }
 }

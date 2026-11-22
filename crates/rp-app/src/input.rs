@@ -47,14 +47,42 @@ impl Action {
 pub struct Bindings {
     keys: Vec<(KeyCode, Action)>,
     joy: Vec<(u32, Action)>,
+    /// Buttons Popper binds to "Exit Emulators": they close a running game.
+    exit_joy: Vec<u32>,
+    /// Keys (Windows virtual-key codes) Popper binds to "Exit Emulators".
+    exit_keys: Vec<i32>,
 }
 
+/// The Popper function that closes the running game.
+const EXIT_EMULATORS: &str = "Exit Emulators";
+
 impl Bindings {
-    /// Built-in defaults plus whatever Popper has bound in PinUPFunctions.
-    /// `joy_overrides` (from rusty-popper.toml) replace any Popper binding on
-    /// the same button.
-    pub fn new(functions: &[Function], joy_overrides: &[(u32, Action)]) -> Self {
-        let mut keys = vec![
+    /// Whatever Popper has bound in PinUPFunctions, plus built-in keyboard
+    /// defaults for keys Popper leaves free. `joy_overrides` (from
+    /// rusty-popper.toml) replace any Popper binding on the same button.
+    /// `keyboard_quit` enables Q as an immediate quit.
+    pub fn new(functions: &[Function], joy_overrides: &[(u32, Action)], keyboard_quit: bool) -> Self {
+        let mut keys = Vec::new();
+        let mut joy = Vec::new();
+        let mut exit_joy = Vec::new();
+        let mut exit_keys = Vec::new();
+        for f in functions.iter().filter(|f| f.active) {
+            let Some(action) = Action::from_popper(&f.name) else { continue };
+            if let Some(vk) = f.key.filter(|vk| f.name == EXIT_EMULATORS && (1..255).contains(vk)) {
+                exit_keys.push(vk as i32);
+            }
+            if let Some(code) = f.key.and_then(vk_to_keycode) {
+                keys.push((code, action));
+            }
+            if let Some(b) = f.joy_button.filter(|b| (0..32).contains(b)) {
+                joy.push((b as u32, action));
+                if f.name == EXIT_EMULATORS && !exit_joy.contains(&(b as u32)) {
+                    exit_joy.push(b as u32);
+                }
+            }
+        }
+        // Popper's own key bindings come first, so they win over the defaults.
+        keys.extend([
             (KeyCode::ArrowLeft, Action::Prev),
             (KeyCode::ShiftLeft, Action::Prev),
             (KeyCode::ArrowRight, Action::Next),
@@ -67,21 +95,19 @@ impl Bindings {
             (KeyCode::NumpadEnter, Action::Start),
             (KeyCode::Escape, Action::Menu),
             (KeyCode::KeyP, Action::Playlists),
-            (KeyCode::KeyQ, Action::Quit),
             (KeyCode::KeyW, Action::ToggleStyle),
-        ];
-        let mut joy = Vec::new();
-        for f in functions.iter().filter(|f| f.active) {
-            let Some(action) = Action::from_popper(&f.name) else { continue };
-            if let Some(code) = f.key.and_then(vk_to_keycode) {
-                keys.push((code, action));
-            }
-            if let Some(b) = f.joy_button.filter(|b| (0..32).contains(b)) {
-                joy.push((b as u32, action));
-            }
+        ]);
+        if keyboard_quit {
+            keys.push((KeyCode::KeyQ, Action::Quit));
         }
         for &(b, action) in joy_overrides.iter().filter(|(b, _)| *b < 32) {
             joy.retain(|(jb, _)| *jb != b);
+            // A button set to open the exit menu also closes a running game;
+            // any other use takes the button away from "Exit Emulators".
+            exit_joy.retain(|jb| *jb != b);
+            if action == Action::Menu {
+                exit_joy.push(b);
+            }
             joy.push((b, action));
         }
         // Popper often binds one button to several functions (e.g. joy 9 for
@@ -98,7 +124,7 @@ impl Bindings {
                 uniq_keys.push(k);
             }
         }
-        Bindings { keys: uniq_keys, joy: uniq_joy }
+        Bindings { keys: uniq_keys, joy: uniq_joy, exit_joy, exit_keys }
     }
 
     pub fn key(&self, code: KeyCode, repeat: bool) -> Option<Action> {
@@ -157,14 +183,21 @@ pub struct Joysticks {
     ids: Vec<u32>,
     last_scan: Instant,
     held: Vec<(u32, u32, Instant, Instant)>, // (joy id, button, pressed at, last fired)
+    /// Whether an exit button was down at the last [`exit_pressed`](Self::exit_pressed) check.
+    exit_down: bool,
 }
+
+/// How often to look for joysticks: often while none is known, rarely once
+/// one is (asking winmm about absent ids can stall for a moment).
+const SCAN_EVERY_NONE: Duration = Duration::from_secs(5);
+const SCAN_EVERY_SOME: Duration = Duration::from_secs(60);
 
 const REPEAT_DELAY: Duration = Duration::from_millis(400);
 const REPEAT_EVERY: Duration = Duration::from_millis(90);
 
 impl Joysticks {
     pub fn new() -> Self {
-        let mut j = Joysticks { ids: Vec::new(), last_scan: Instant::now(), held: Vec::new() };
+        let mut j = Joysticks { ids: Vec::new(), last_scan: Instant::now(), held: Vec::new(), exit_down: false };
         j.scan();
         j
     }
@@ -201,13 +234,47 @@ impl Joysticks {
         }
     }
 
+    fn rescan_if_due(&mut self) {
+        let every = if self.ids.is_empty() { SCAN_EVERY_NONE } else { SCAN_EVERY_SOME };
+        if self.last_scan.elapsed() > every {
+            self.scan();
+        }
+    }
+
+    fn exit_down_now(&self, bindings: &Bindings) -> bool {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        // The keyboard is asked directly: the game has the focus, so no key
+        // events reach our windows.
+        if bindings.exit_keys.iter().any(|&vk| unsafe { GetAsyncKeyState(vk) } < 0) {
+            return true;
+        }
+        let mask = bindings.exit_joy.iter().fold(0u32, |m, b| m | (1 << b));
+        mask != 0 && self.ids.iter().any(|&id| Self::read(id).is_some_and(|buttons| buttons & mask != 0))
+    }
+
+    /// Call when a game starts: an exit button already held doesn't count.
+    pub fn arm_exit(&mut self, bindings: &Bindings) {
+        self.exit_down = self.exit_down_now(bindings);
+    }
+
+    /// While a game runs: true when an "Exit Emulators" button or key has
+    /// just been pressed. Works whichever window has the focus.
+    pub fn exit_pressed(&mut self, bindings: &Bindings) -> bool {
+        if bindings.exit_joy.is_empty() && bindings.exit_keys.is_empty() {
+            return false;
+        }
+        self.rescan_if_due();
+        let down = self.exit_down_now(bindings);
+        let pressed = down && !self.exit_down;
+        self.exit_down = down;
+        pressed
+    }
+
     pub fn poll(&mut self, bindings: &Bindings, out: &mut Vec<Action>) {
         if bindings.joy.is_empty() {
             return;
         }
-        if self.last_scan.elapsed() > Duration::from_secs(5) {
-            self.scan();
-        }
+        self.rescan_if_due();
         let now = Instant::now();
         let mut still_held = Vec::new();
         for &id in &self.ids {
@@ -233,5 +300,52 @@ impl Joysticks {
             }
         }
         self.held = still_held;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn f(index: i64, name: &str, key: Option<i64>, joy: Option<i64>) -> Function {
+        Function { index, name: name.into(), key, joy_button: joy, active: true }
+    }
+
+    #[test]
+    fn popper_bindings_win_over_defaults_and_overrides_win_over_popper() {
+        let functions = [
+            f(1, "Game Prior", Some(0xA0), Some(4)),        // left shift, as by default
+            f(2, "Page Next", Some(0x27), Some(6)),         // right arrow: a default says Next
+            f(3, "System Menu", None, Some(9)),
+            f(4, "Exit Emulators", Some(0x51), Some(9)),    // Q
+            f(5, "Game Start", Some(0x0D), Some(7)),
+            Function { active: false, ..f(6, "Game Next", Some(0x41), Some(5)) },
+        ];
+        let b = Bindings::new(&functions, &[(6, Action::Playlists)], true);
+        assert_eq!(b.key(KeyCode::ArrowRight, false), Some(Action::PageNext));
+        assert_eq!(b.key(KeyCode::ShiftLeft, false), Some(Action::Prev));
+        assert_eq!(b.key(KeyCode::KeyQ, false), Some(Action::Menu)); // Popper's use of Q beats quit
+        assert_eq!(b.key(KeyCode::KeyA, false), None); // inactive function
+        assert_eq!(b.key(KeyCode::Enter, true), None); // Start doesn't auto-repeat
+        assert_eq!(b.key(KeyCode::ArrowLeft, true), Some(Action::Prev));
+        // Button 9 is bound twice to Menu: one binding. Button 6 was overridden.
+        assert_eq!(b.joy, [(4, Action::Prev), (9, Action::Menu), (7, Action::Start), (6, Action::Playlists)]);
+        assert_eq!(b.exit_joy, [9]);
+        assert_eq!(b.exit_keys, [0x51]);
+    }
+
+    #[test]
+    fn overrides_decide_which_buttons_close_a_game() {
+        let functions = [f(1, "Exit Emulators", None, Some(9)), f(2, "Game Start", None, Some(7))];
+        // Button 9 stays the exit button when the override also says Menu...
+        assert_eq!(Bindings::new(&functions, &[(9, Action::Menu), (3, Action::Menu)], true).exit_joy, [9, 3]);
+        // ...and stops being one when it is given another job.
+        assert_eq!(Bindings::new(&functions, &[(9, Action::Playlists)], true).exit_joy, [] as [u32; 0]);
+    }
+
+    #[test]
+    fn quit_key_can_be_turned_off() {
+        assert_eq!(Bindings::new(&[], &[], true).key(KeyCode::KeyQ, false), Some(Action::Quit));
+        assert_eq!(Bindings::new(&[], &[], false).key(KeyCode::KeyQ, false), None);
     }
 }

@@ -19,6 +19,20 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # letter_prev_joy_buttons = []
 # letter_next_joy_buttons = []
 # playlist_joy_buttons = []
+# Ignore the cabinet buttons while another program covers a screen (a table
+# started from VPin Studio, say), so they don't also drive the hidden menu.
+# joystick_needs_focus = true
+# Q quits at once, without the exit menu. Turn off if a cabinet button sends Q.
+# keyboard_quit = true
+
+[launch]
+# Helper programs in an emulator's folder that don't mean a game is running,
+# on top of the built-in list (dmdext, FPLoader, Steam's own services).
+# ignore_processes = ["somehelper.exe"]
+
+[paths]
+# popper_dir = 'C:\vPinball\PinUPSystem'      # default
+# mpv_dll = 'C:\somewhere\libmpv-2.dll'       # default: next to the exe
 
 [attract]
 # enabled = true

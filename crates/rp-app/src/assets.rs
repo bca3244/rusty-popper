@@ -20,6 +20,11 @@ pub struct Logo {
     pub hue: f32,
 }
 
+/// A receiver that never yields anything (no loader running).
+pub fn idle() -> Receiver<Logo> {
+    channel().1
+}
+
 /// Loads `paths` on a worker thread in `order` (closest to the selection first).
 pub fn spawn_loader(paths: Vec<Option<PathBuf>>, order: Vec<usize>) -> Receiver<Logo> {
     let (tx, rx) = channel();
@@ -28,13 +33,16 @@ pub fn spawn_loader(paths: Vec<Option<PathBuf>>, order: Vec<usize>) -> Receiver<
         .spawn(move || {
             for i in order {
                 let Some(path) = &paths[i] else { continue };
-                match load(i, path) {
-                    Ok(logo) => {
+                // A bad image must not stop the rest from loading, even if the
+                // decoder panics on it.
+                match std::panic::catch_unwind(|| load(i, path)) {
+                    Ok(Ok(logo)) => {
                         if tx.send(logo).is_err() {
                             return;
                         }
                     }
-                    Err(e) => eprintln!("wheel {}: {e}", path.display()),
+                    Ok(Err(e)) => log::warn!("wheel {}: {e}", path.display()),
+                    Err(_) => log::warn!("wheel {}: decoder panicked", path.display()),
                 }
             }
         })
@@ -45,9 +53,10 @@ pub fn spawn_loader(paths: Vec<Option<PathBuf>>, order: Vec<usize>) -> Receiver<
 fn load(index: usize, path: &PathBuf) -> anyhow::Result<Logo> {
     let img = image::open(path)?.to_rgba8();
     let (w, h) = img.dimensions();
+    anyhow::ensure!(w > 0 && h > 0, "empty image");
     let scale = (LOGO_MAX as f32 / w.max(h) as f32).min(1.0);
     let rgba = if scale < 1.0 {
-        imageops::resize(&img, (w as f32 * scale) as u32, (h as f32 * scale) as u32, FilterType::Triangle)
+        imageops::resize(&img, ((w as f32 * scale) as u32).max(1), ((h as f32 * scale) as u32).max(1), FilterType::Triangle)
     } else {
         img
     };
@@ -59,7 +68,7 @@ fn load(index: usize, path: &PathBuf) -> anyhow::Result<Logo> {
 fn make_glow(rgba: &RgbaImage, hue: f32) -> RgbaImage {
     let (w, h) = rgba.dimensions();
     let s = GLOW_INNER as f32 / w.max(h) as f32;
-    let (iw, ih) = (((w as f32) * s).max(1.0) as u32, ((h as f32) * s).max(1.0) as u32);
+    let (iw, ih) = ((((w as f32) * s) as u32).clamp(1, GLOW_INNER), (((h as f32) * s) as u32).clamp(1, GLOW_INNER));
     let small = imageops::resize(rgba, iw, ih, FilterType::Triangle);
     let mut alpha = GrayImage::new(GLOW_SIZE, GLOW_SIZE);
     let (ox, oy) = ((GLOW_SIZE - iw) / 2, (GLOW_SIZE - ih) / 2);
