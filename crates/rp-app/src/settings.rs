@@ -114,6 +114,8 @@ pub struct Settings {
     pub input: InputSettings,
     #[serde(default)]
     pub attract: AttractSettings,
+    #[serde(default)]
+    pub audio: AudioSettings,
 }
 
 impl Settings {
@@ -124,4 +126,40 @@ impl Settings {
         let text = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&text)?)
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AudioSettings {
+    /// Playfield video volume, 0-100. Default: PinUpPlayer.ini's playfield volume.
+    pub volume: Option<i32>,
+}
+
+/// Values the in-menu Options screen can change.
+pub struct Editable {
+    pub style: WheelStyle,
+    pub attract_enabled: bool,
+    pub attract_idle_secs: u64,
+    pub attract_interval_secs: u64,
+    pub volume: i32,
+}
+
+/// Writes the editable values into rusty-popper.toml, keeping everything
+/// else in the file (comments, other keys) as it was.
+pub fn save(path: &Path, v: &Editable) -> anyhow::Result<()> {
+    use toml_edit::{value, DocumentMut, Item, Table};
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: DocumentMut = text.parse()?;
+    let mut set = |table: &str, key: &str, val: toml_edit::Value| {
+        if !doc.contains_table(table) {
+            doc.insert(table, Item::Table(Table::new()));
+        }
+        doc[table][key] = value(val);
+    };
+    set("wheel", "style", (if v.style == WheelStyle::Arc { "arc" } else { "flow" }).into());
+    set("attract", "enabled", v.attract_enabled.into());
+    set("attract", "idle_secs", (v.attract_idle_secs as i64).into());
+    set("attract", "interval_secs", (v.attract_interval_secs as i64).into());
+    set("audio", "volume", (v.volume as i64).into());
+    std::fs::write(path, doc.to_string())?;
+    Ok(())
 }
