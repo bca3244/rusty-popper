@@ -60,6 +60,17 @@ Press Esc (or q in a video window) to quit. The spike never writes to Popper's f
 
 Windows is the target platform. Rusty Popper is not affiliated with or endorsed by nailbuster / PinUP Popper.
 
+## Starting at boot
+
+Two PowerShell scripts in `scripts\` (also included next to the exe in the release zip) switch which front end starts at logon:
+
+```powershell
+.\Enable-RustyPopperStartup.ps1    # start Rusty Popper at logon, disable "Run Pinup Popper"
+.\Disable-RustyPopperStartup.ps1   # go back to Pinup Popper
+```
+
+Both scripts ask for administrator rights, which changing Popper's task needs. Nothing is deleted, and `-WhatIf` shows what a script would do without changing anything.
+
 ## License
 
 Dual-licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
