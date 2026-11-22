@@ -1080,7 +1080,9 @@ impl App {
             g.canvas.rotate((rot as f32).to_radians());
             g.canvas.translate(-(lw as f32) / 2.0, -(lh as f32) / 2.0);
         }
-        let verb = if phase == rp_launch::Phase::Exiting { "Exiting" } else { "Launching" };
+        // Once the game is up, the screen behind it already reads "Exiting", so
+        // that's what shows the moment the table closes (not a stale "Launching").
+        let verb = if phase == rp_launch::Phase::Launching { "Launching" } else { "Exiting" };
         wheel::draw_launch(&mut g.canvas, lw as f32, lh as f32, &g.entries[index], verb, &self.items[index].emu_name, t, &g.fonts);
         g.canvas.restore();
         g.canvas.flush();
