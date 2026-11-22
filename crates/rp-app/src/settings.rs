@@ -6,6 +6,9 @@
 //!
 //! [playfield]
 //! ui_rotation = 270   # default: Popper's ThumbRotate
+//!
+//! [input]
+//! menu_joy_buttons = [10]   # extra buttons that open the exit menu
 //! ```
 
 use serde::Deserialize;
@@ -50,11 +53,21 @@ pub struct PlayfieldSettings {
 }
 
 #[derive(Debug, Default, Deserialize)]
+pub struct InputSettings {
+    /// Extra joystick buttons (1-based) that open the exit menu, on top of
+    /// Popper's System Menu / Exit bindings.
+    #[serde(default)]
+    pub menu_joy_buttons: Vec<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub wheel: WheelSettings,
     #[serde(default)]
     pub playfield: PlayfieldSettings,
+    #[serde(default)]
+    pub input: InputSettings,
 }
 
 impl Settings {

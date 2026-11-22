@@ -258,7 +258,10 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
     fill_rect(cv, 0.0, y0 + 182.0, vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
     slot_glow(cv, cx, y0, 420.0, 230.0, entry_hue(sel), 0.9);
 
-    for (i, d) in visible_items(f.wheel.pos, f.entries.len(), 5.5) {
+    // Portrait shows three covers each side, landscape five.
+    // The outermost cover fades in/out as the shelf moves instead of popping.
+    let shown = if vw < DESIGN_W * 0.75 { 3.0 } else { 5.0 };
+    for (i, d) in visible_items(f.wheel.pos, f.entries.len(), shown + 1.0) {
         let e = &f.entries[i];
         let a = d.abs();
         let sgn = d.signum();
@@ -268,7 +271,10 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
         let theta = -sgn * a1 * 1.2;
         let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
         let (w, hgt) = fit(aspect, 520.0, 330.0);
-        let alpha = clamp(1.3 - a * 0.2, 0.0, 1.0);
+        let alpha = clamp(1.3 - a * 0.2, 0.0, 1.0) * clamp(shown + 1.0 - a, 0.0, 1.0);
+        if alpha <= 0.0 {
+            continue;
+        }
 
         let Some(logo) = (if a < 0.04 { None } else { e.logo.as_ref() }) else {
             // Centered (or not yet loaded): flat logo plus reflection.
@@ -395,4 +401,57 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     }
     let counter = format!("{:02} / {}", idx + 1, f.entries.len());
     let _ = cv.fill_text(vw - 96.0, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
+}
+
+/// The exit menu as drawn: options, which is selected, and seconds since it opened.
+pub struct MenuView<'a> {
+    pub title: &'a str,
+    pub options: &'a [&'a str],
+    pub selected: usize,
+    pub t: f32,
+}
+
+/// Draws the exit menu centered over the playfield (same frame as `draw`).
+pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
+    let s = (h / DESIGN_H).min(w / DESIGN_H);
+    let (vw, dh) = (w / s, h / s);
+    let a = ease_out(m.t / 0.2);
+    cv.save();
+    cv.scale(s, s);
+    fill_rect(cv, 0.0, 0.0, vw, dh, Color::rgbaf(0.02, 0.025, 0.04, 0.72 * a));
+
+    let row_h = 96.0;
+    let pw = (vw - 160.0).min(820.0);
+    let ph = 150.0 + m.options.len() as f32 * row_h + 40.0;
+    let (px, py) = ((vw - pw) / 2.0, (dh - ph) / 2.0 + (1.0 - a) * 40.0);
+    let mut p = Path::new();
+    p.rounded_rect(px, py, pw, ph, 28.0);
+    cv.fill_path(&p, &Paint::color(Color::rgbaf(0.07, 0.086, 0.13, 0.96 * a)));
+    cv.stroke_path(&p, &Paint::color(Color::rgbaf(0.13, 0.16, 0.23, a)).with_line_width(2.0));
+
+    let title = Paint::color(Color::rgbaf(0.9, 0.92, 0.96, a))
+        .with_font(&[fonts.display])
+        .with_font_size(64.0)
+        .with_text_align(Align::Center)
+        .with_text_baseline(Baseline::Alphabetic);
+    let _ = cv.fill_text(vw / 2.0, py + 104.0, m.title, &title);
+
+    let accent = Color::rgbaf(0.325, 0.827, 1.0, a);
+    for (i, opt) in m.options.iter().enumerate() {
+        let y = py + 150.0 + i as f32 * row_h;
+        let sel = i == m.selected;
+        if sel {
+            let mut p = Path::new();
+            p.rounded_rect(px + 32.0, y + 8.0, pw - 64.0, row_h - 16.0, (row_h - 16.0) / 2.0);
+            cv.fill_path(&p, &Paint::color(accent));
+        }
+        let c = if sel { Color::rgbaf(0.04, 0.047, 0.07, a) } else { Color::rgbaf(0.88, 0.9, 0.95, 0.85 * a) };
+        let paint = Paint::color(c)
+            .with_font(&[fonts.body])
+            .with_font_size(42.0)
+            .with_text_align(Align::Center)
+            .with_text_baseline(Baseline::Middle);
+        let _ = cv.fill_text(vw / 2.0, y + row_h / 2.0, opt, &paint);
+    }
+    cv.restore();
 }

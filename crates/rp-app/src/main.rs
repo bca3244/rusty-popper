@@ -6,7 +6,7 @@
 //!                [--wheel arc|flow] [--seconds N] [--list] [--dry-run]
 //!
 //! Browse with Left/Right (or Popper's bound buttons), W switches wheel style,
-//! Esc or Q quits.
+//! Esc (or Popper's exit buttons) opens the exit menu; Q quits at once.
 
 mod assets;
 mod input;
@@ -145,7 +145,7 @@ fn main() -> Result<()> {
     let db = db::PopperDb::open_copy(&args.popper.join("PUPDatabase.db"))?;
     let emus = db.emulators()?;
     let items = load_items(&args.popper, &emus, db.games()?);
-    let bindings = input::Bindings::new(&db.functions()?);
+    let bindings = input::Bindings::new(&db.functions()?, &settings.input.menu_joy_buttons);
     let ui_rotation = settings.playfield.ui_rotation.unwrap_or(db.menu_rotation().unwrap_or(0)).rem_euclid(360);
     drop(db);
     println!("Menu rotation: {ui_rotation} deg");
@@ -206,6 +206,7 @@ fn main() -> Result<()> {
         deadline: args.seconds.map(|s| Instant::now() + Duration::from_secs(s)),
         gfx: None,
         error: None,
+        menu: None,
     };
     event_loop.run_app(&mut app)?;
     if let Some(e) = app.error {
@@ -252,6 +253,24 @@ struct Gfx {
     last: Instant,
 }
 
+/// Exit menu entries. "Back" is first and selected on open so a stray press
+/// of Start never reboots or shuts down the cabinet.
+const EXIT_MENU: &[&str] = &["Back to games", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
+
+struct ExitMenu {
+    selected: usize,
+    opened: Instant,
+}
+
+/// Restarts (`/r`) or shuts down (`/s`) Windows, then exits.
+fn power(el: &ActiveEventLoop, flag: &str) {
+    println!("Running shutdown {flag} /t 0");
+    if let Err(e) = std::process::Command::new("shutdown").args([flag, "/t", "0"]).spawn() {
+        eprintln!("shutdown {flag} failed: {e}");
+    }
+    el.exit();
+}
+
 struct App {
     mpv: mpv::Mpv,
     screens: Vec<Screen>,
@@ -264,6 +283,7 @@ struct App {
     deadline: Option<Instant>,
     gfx: Option<Gfx>,
     error: Option<anyhow::Error>,
+    menu: Option<ExitMenu>,
 }
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
@@ -390,10 +410,34 @@ impl App {
         Ok(())
     }
 
+    #[allow(clippy::needless_return)]
     fn act(&mut self, el: &ActiveEventLoop, action: input::Action) {
         use input::Action::*;
         let Some(g) = self.gfx.as_mut() else { return };
+        // While the exit menu is open, browsing buttons move its highlight.
+        if let Some(menu) = self.menu.as_mut() {
+            let n = EXIT_MENU.len();
+            match action {
+                Prev | PagePrev | JumpPrev => menu.selected = (menu.selected + n - 1) % n,
+                Next | PageNext | JumpNext => menu.selected = (menu.selected + 1) % n,
+                Menu => self.menu = None,
+                Quit => el.exit(),
+                Start => {
+                    let choice = menu.selected;
+                    self.menu = None;
+                    match choice {
+                        1 => el.exit(),
+                        2 => power(el, "/r"),
+                        3 => power(el, "/s"),
+                        _ => {}
+                    }
+                }
+                ToggleStyle => {}
+            }
+            return;
+        }
         match action {
+            Menu => self.menu = Some(ExitMenu { selected: 0, opened: Instant::now() }),
             Prev => g.wheel.step(-1),
             Next => g.wheel.step(1),
             // On Brian's cabinet Popper's "Page" functions sit on the flipper
@@ -481,6 +525,10 @@ impl App {
         let fade = if g.shown == sel { ((now - g.swapped_at) / wheel::MEDIA_FADE).min(1.0) } else { 1.0 };
         let frame = wheel::Frame { style, wheel: &g.wheel, entries: &g.entries, fonts: &g.fonts, video_fade: fade };
         wheel::draw(&mut g.canvas, lw as f32, lh as f32, &frame);
+        if let Some(menu) = &self.menu {
+            let view = wheel::MenuView { title: "Exit", options: EXIT_MENU, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
+            wheel::draw_menu(&mut g.canvas, lw as f32, lh as f32, &view, &g.fonts);
+        }
         g.canvas.restore();
         g.canvas.flush();
         pf.surface.swap_buffers(&g.context)?;

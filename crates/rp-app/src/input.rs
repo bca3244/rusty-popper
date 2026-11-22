@@ -1,4 +1,4 @@
-﻿//! Menu input: keyboard (winit) plus joystick buttons (winmm, the same
+//! Menu input: keyboard (winit) plus joystick buttons (winmm, the same
 //! 1-based button numbers Popper stores in PinUPFunctions.JoyCodes).
 
 use rp_db::Function;
@@ -16,6 +16,8 @@ pub enum Action {
     JumpNext,
     Start,
     Quit,
+    /// Open (or close) the exit menu.
+    Menu,
     ToggleStyle,
 }
 
@@ -32,7 +34,7 @@ impl Action {
             "Page Prior" => Action::PagePrev,
             "Page Next" => Action::PageNext,
             "Game Start" | "_Game Start Alt" => Action::Start,
-            "Menu/System Exit" => Action::Quit,
+            "Menu/System Exit" | "System Menu" | "Exit Emulators" => Action::Menu,
             _ => return None,
         })
     }
@@ -45,7 +47,7 @@ pub struct Bindings {
 
 impl Bindings {
     /// Built-in defaults plus whatever Popper has bound in PinUPFunctions.
-    pub fn new(functions: &[Function]) -> Self {
+    pub fn new(functions: &[Function], extra_menu_buttons: &[u32]) -> Self {
         let mut keys = vec![
             (KeyCode::ArrowLeft, Action::Prev),
             (KeyCode::ShiftLeft, Action::Prev),
@@ -55,7 +57,7 @@ impl Bindings {
             (KeyCode::ArrowDown, Action::JumpNext),
             (KeyCode::Enter, Action::Start),
             (KeyCode::NumpadEnter, Action::Start),
-            (KeyCode::Escape, Action::Quit),
+            (KeyCode::Escape, Action::Menu),
             (KeyCode::KeyQ, Action::Quit),
             (KeyCode::KeyW, Action::ToggleStyle),
         ];
@@ -69,7 +71,24 @@ impl Bindings {
                 joy.push((b as u32, action));
             }
         }
-        Bindings { keys, joy }
+        for b in extra_menu_buttons.iter().filter(|b| (1..=32).contains(*b)) {
+            joy.push((*b, Action::Menu));
+        }
+        // Popper often binds one button to several functions (e.g. joy 9 for
+        // both System Menu and Exit Emulators); fire each action once.
+        let mut uniq_joy: Vec<(u32, Action)> = Vec::new();
+        for j in joy {
+            if !uniq_joy.contains(&j) {
+                uniq_joy.push(j);
+            }
+        }
+        let mut uniq_keys: Vec<(KeyCode, Action)> = Vec::new();
+        for k in keys {
+            if !uniq_keys.iter().any(|u| u.0 == k.0) {
+                uniq_keys.push(k);
+            }
+        }
+        Bindings { keys: uniq_keys, joy: uniq_joy }
     }
 
     pub fn key(&self, code: KeyCode, repeat: bool) -> Option<Action> {
