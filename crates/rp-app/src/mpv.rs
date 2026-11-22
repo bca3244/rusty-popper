@@ -1,5 +1,6 @@
 //! Minimal libmpv binding, loaded at runtime from libmpv-2.dll so no import
-//! library is needed at build time.
+//! library is needed at build time. Uses the render API: mpv draws each
+//! screen's video into our OpenGL framebuffer, and we draw the UI on top.
 
 use anyhow::{anyhow, bail, Result};
 use libloading::Library;
@@ -8,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 type MpvHandle = c_void;
+type RenderCtx = c_void;
 
 #[repr(C)]
 struct MpvEvent {
@@ -16,6 +18,32 @@ struct MpvEvent {
     reply_userdata: u64,
     data: *mut c_void,
 }
+
+#[repr(C)]
+struct RenderParam {
+    kind: c_int,
+    data: *mut c_void,
+}
+
+#[repr(C)]
+struct OpenGlInitParams {
+    get_proc_address: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    get_proc_address_ctx: *mut c_void,
+}
+
+#[repr(C)]
+struct OpenGlFbo {
+    fbo: c_int,
+    w: c_int,
+    h: c_int,
+    internal_format: c_int,
+}
+
+const RENDER_PARAM_INVALID: c_int = 0;
+const RENDER_PARAM_API_TYPE: c_int = 1;
+const RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+const RENDER_PARAM_OPENGL_FBO: c_int = 3;
+const RENDER_PARAM_FLIP_Y: c_int = 4;
 
 pub const EVENT_SHUTDOWN: i32 = 1;
 
@@ -28,6 +56,9 @@ struct Api {
     wait_event: unsafe extern "C" fn(*mut MpvHandle, f64) -> *mut MpvEvent,
     terminate_destroy: unsafe extern "C" fn(*mut MpvHandle),
     error_string: unsafe extern "C" fn(c_int) -> *const c_char,
+    render_create: unsafe extern "C" fn(*mut *mut RenderCtx, *mut MpvHandle, *mut RenderParam) -> c_int,
+    render_render: unsafe extern "C" fn(*mut RenderCtx, *mut RenderParam) -> c_int,
+    render_free: unsafe extern "C" fn(*mut RenderCtx),
 }
 
 #[derive(Clone)]
@@ -51,6 +82,9 @@ impl Mpv {
                 wait_event: sym!("mpv_wait_event"),
                 terminate_destroy: sym!("mpv_terminate_destroy"),
                 error_string: sym!("mpv_error_string"),
+                render_create: sym!("mpv_render_context_create"),
+                render_render: sym!("mpv_render_context_render"),
+                render_free: sym!("mpv_render_context_free"),
                 _lib: lib,
             };
             Ok(Mpv(Arc::new(api)))
@@ -61,18 +95,16 @@ impl Mpv {
         unsafe { CStr::from_ptr((self.0.error_string)(code)).to_string_lossy().into_owned() }
     }
 
+    /// Creates a player that renders through the render API (`vo=libmpv`).
     pub fn player(&self, options: &[(&str, String)]) -> Result<Player> {
         let h = unsafe { (self.0.create)() };
         if h.is_null() {
             bail!("mpv_create failed");
         }
-        let p = Player { api: self.clone(), h };
+        let p = Player { api: self.clone(), h, render: std::ptr::null_mut() };
+        p.set_option("vo", "libmpv")?;
         for (k, v) in options {
-            let (ck, cv) = (CString::new(*k)?, CString::new(v.as_str())?);
-            let rc = unsafe { (self.0.set_option_string)(h, ck.as_ptr(), cv.as_ptr()) };
-            if rc < 0 {
-                bail!("mpv option {k}={v}: {}", self.err(rc));
-            }
+            p.set_option(k, v)?;
         }
         let rc = unsafe { (self.0.initialize)(h) };
         if rc < 0 {
@@ -82,12 +114,67 @@ impl Mpv {
     }
 }
 
+/// Resolves GL function pointers for mpv. Must stay alive as long as any
+/// render context created with it.
+pub type GetProcAddress = dyn Fn(&CStr) -> *const c_void;
+
+unsafe extern "C" fn get_proc_trampoline(ctx: *mut c_void, name: *const c_char) -> *mut c_void {
+    let f = unsafe { &*(ctx as *const Box<GetProcAddress>) };
+    f(unsafe { CStr::from_ptr(name) }) as *mut c_void
+}
+
 pub struct Player {
     api: Mpv,
     h: *mut MpvHandle,
+    render: *mut RenderCtx,
 }
 
 impl Player {
+    fn set_option(&self, k: &str, v: &str) -> Result<()> {
+        let (ck, cv) = (CString::new(k)?, CString::new(v)?);
+        let rc = unsafe { (self.api.0.set_option_string)(self.h, ck.as_ptr(), cv.as_ptr()) };
+        if rc < 0 {
+            bail!("mpv option {k}={v}: {}", self.api.err(rc));
+        }
+        Ok(())
+    }
+
+    /// Attaches an OpenGL render context. The GL context must be current.
+    /// `loader` must outlive the player.
+    pub fn init_gl(&mut self, loader: &Box<GetProcAddress>) -> Result<()> {
+        let mut init = OpenGlInitParams {
+            get_proc_address: get_proc_trampoline,
+            get_proc_address_ctx: loader as *const Box<GetProcAddress> as *mut c_void,
+        };
+        let api_type = CString::new("opengl")?;
+        let mut params = [
+            RenderParam { kind: RENDER_PARAM_API_TYPE, data: api_type.as_ptr() as *mut c_void },
+            RenderParam { kind: RENDER_PARAM_OPENGL_INIT_PARAMS, data: &mut init as *mut _ as *mut c_void },
+            RenderParam { kind: RENDER_PARAM_INVALID, data: std::ptr::null_mut() },
+        ];
+        let rc = unsafe { (self.api.0.render_create)(&mut self.render, self.h, params.as_mut_ptr()) };
+        if rc < 0 {
+            bail!("mpv_render_context_create: {}", self.api.err(rc));
+        }
+        Ok(())
+    }
+
+    /// Draws the current video frame into framebuffer 0. The GL context for
+    /// this screen must be current.
+    pub fn render(&self, w: i32, h: i32) {
+        if self.render.is_null() {
+            return;
+        }
+        let mut fbo = OpenGlFbo { fbo: 0, w, h, internal_format: 0 };
+        let mut flip: c_int = 1;
+        let mut params = [
+            RenderParam { kind: RENDER_PARAM_OPENGL_FBO, data: &mut fbo as *mut _ as *mut c_void },
+            RenderParam { kind: RENDER_PARAM_FLIP_Y, data: &mut flip as *mut _ as *mut c_void },
+            RenderParam { kind: RENDER_PARAM_INVALID, data: std::ptr::null_mut() },
+        ];
+        unsafe { (self.api.0.render_render)(self.render, params.as_mut_ptr()) };
+    }
+
     pub fn command(&self, args: &[&str]) -> Result<()> {
         let owned: Vec<CString> = args.iter().map(|a| CString::new(*a)).collect::<Result<_, _>>()?;
         let mut ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
@@ -97,6 +184,14 @@ impl Player {
             bail!("mpv command {args:?}: {}", self.api.err(rc));
         }
         Ok(())
+    }
+
+    /// Loads a file in a loop, or stops (black) when there is none.
+    pub fn show(&self, media: Option<&Path>) -> Result<()> {
+        match media {
+            Some(m) => self.command(&["loadfile", &m.to_string_lossy()]),
+            None => self.command(&["stop"]),
+        }
     }
 
     /// Drains pending events without blocking; returns the ids seen.
@@ -114,10 +209,21 @@ impl Player {
         }
         ids
     }
+
+    /// Frees the render context. The GL context must be current.
+    pub fn free_gl(&mut self) {
+        if !self.render.is_null() {
+            unsafe { (self.api.0.render_free)(self.render) };
+            self.render = std::ptr::null_mut();
+        }
+    }
 }
 
 impl Drop for Player {
     fn drop(&mut self) {
+        // free_gl() should have been called with the context current; if not,
+        // mpv still requires the render context to be gone before destroy.
+        self.free_gl();
         unsafe { (self.api.0.terminate_destroy)(self.h) };
     }
 }

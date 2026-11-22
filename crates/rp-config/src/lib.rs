@@ -10,6 +10,14 @@ use std::path::{Path, PathBuf};
 /// Media extensions Popper accepts, in lookup order.
 pub const MEDIA_EXTS: &[&str] = &["mp4", "f4v", "mkv", "avi", "mov", "apng", "gif", "png", "jpg"];
 
+/// Finds the wheel logo `<emu media dir>\Wheel\<GameName>.png|apng`.
+pub fn find_wheel(emu_media_dir: &Path, game_name: &str) -> Option<PathBuf> {
+    ["png", "apng"]
+        .iter()
+        .map(|ext| emu_media_dir.join("Wheel").join(format!("{game_name}.{ext}")))
+        .find(|p| p.is_file())
+}
+
 /// Finds `<emu media dir>\<slot folder>\<GameName>.<ext>`.
 pub fn find_media(emu_media_dir: &Path, slot: Slot, game_name: &str) -> Option<PathBuf> {
     MEDIA_EXTS

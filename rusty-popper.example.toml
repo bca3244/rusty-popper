@@ -1,0 +1,14 @@
+# Copy next to rusty-popper.exe as rusty-popper.toml. Everything is optional.
+
+[wheel]
+style = "arc"          # "arc" or "flow"; W toggles at runtime
+
+[playfield]
+# Degrees clockwise to turn the menu so it faces the player.
+# Default: Popper's GlobalSettings.ThumbRotate.
+# ui_rotation = 270
+
+[input]
+# Extra joystick buttons (1-based, as Popper numbers them) that open the
+# exit menu, in addition to Popper's System Menu / Exit bindings.
+# menu_joy_buttons = [10]

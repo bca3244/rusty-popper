@@ -21,6 +21,41 @@ pub struct Game {
     pub name: String,
     pub display: String,
     pub file_name: String,
+    pub manufacturer: Option<String>,
+    pub year: Option<i64>,
+    pub players: Option<i64>,
+}
+
+/// One row of PinUPFunctions: a menu action and its keyboard / joystick binding.
+#[derive(Debug, Clone)]
+pub struct Function {
+    pub index: i64,
+    pub name: String,
+    /// Windows virtual-key code, if bound.
+    pub key: Option<i64>,
+    /// 1-based joystick button, if bound.
+    pub joy_button: Option<i64>,
+    pub active: bool,
+}
+
+/// SQLite columns are loosely typed; Popper stores some numbers as text.
+fn opt_int(v: rusqlite::types::Value) -> Option<i64> {
+    use rusqlite::types::Value::*;
+    match v {
+        Integer(i) => Some(i),
+        Real(f) => Some(f as i64),
+        Text(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn opt_text(v: rusqlite::types::Value) -> Option<String> {
+    use rusqlite::types::Value::*;
+    match v {
+        Text(s) if !s.trim().is_empty() => Some(s),
+        Integer(i) => Some(i.to_string()),
+        _ => None,
+    }
 }
 
 pub struct PopperDb {
@@ -53,7 +88,8 @@ impl PopperDb {
 
     pub fn games(&self) -> Result<Vec<Game>> {
         let mut st = self.conn.prepare(
-            "SELECT GameID, EMUID, GameName, COALESCE(GameDisplay, GameName), GameFileName
+            "SELECT GameID, EMUID, GameName, COALESCE(GameDisplay, GameName), GameFileName,
+                    Manufact, GameYear, NumPlayers
              FROM Games WHERE Visible = 1 ORDER BY COALESCE(GameDisplay, GameName) COLLATE NOCASE",
         )?;
         let rows = st.query_map([], |r| {
@@ -63,6 +99,32 @@ impl PopperDb {
                 name: r.get(2)?,
                 display: r.get(3)?,
                 file_name: r.get(4)?,
+                manufacturer: opt_text(r.get(5)?),
+                year: opt_int(r.get(6)?),
+                players: opt_int(r.get(7)?),
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Popper's menu rotation (GlobalSettings.ThumbRotate, degrees clockwise):
+    /// how the wheel is turned to face the player on a rotated playfield.
+    pub fn menu_rotation(&self) -> Result<i32> {
+        let v: rusqlite::types::Value = self.conn.query_row("SELECT ThumbRotate FROM GlobalSettings LIMIT 1", [], |r| r.get(0))?;
+        Ok(opt_int(v).unwrap_or(0) as i32)
+    }
+
+    pub fn functions(&self) -> Result<Vec<Function>> {
+        let mut st = self.conn.prepare(
+            "SELECT fIndex, Descript, CntrlCodes, JoyCodes, Active FROM PinUPFunctions ORDER BY fIndex",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(Function {
+                index: r.get(0)?,
+                name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                key: opt_int(r.get(2)?).filter(|k| *k > 0),
+                joy_button: opt_int(r.get(3)?).filter(|b| *b > 0),
+                active: opt_int(r.get(4)?).unwrap_or(0) != 0,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
