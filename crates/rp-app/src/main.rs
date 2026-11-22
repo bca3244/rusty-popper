@@ -146,7 +146,9 @@ fn main() -> Result<()> {
     let emus = db.emulators()?;
     let items = load_items(&args.popper, &emus, db.games()?);
     let bindings = input::Bindings::new(&db.functions()?);
+    let ui_rotation = settings.playfield.ui_rotation.unwrap_or(db.menu_rotation().unwrap_or(0)).rem_euclid(360);
     drop(db);
+    println!("Menu rotation: {ui_rotation} deg");
     println!("DB: {} visible emulators, {} games on the wheel", emus.len(), items.len());
     println!("Input: {}", bindings.describe());
 
@@ -200,6 +202,7 @@ fn main() -> Result<()> {
         bindings,
         style,
         start,
+        ui_rotation,
         deadline: args.seconds.map(|s| Instant::now() + Duration::from_secs(s)),
         gfx: None,
         error: None,
@@ -256,6 +259,8 @@ struct App {
     bindings: input::Bindings,
     style: WheelStyle,
     start: usize,
+    /// Extra clockwise turn of the menu overlay (Popper's ThumbRotate).
+    ui_rotation: i32,
     deadline: Option<Instant>,
     gfx: Option<Gfx>,
     error: Option<anyhow::Error>,
@@ -464,14 +469,15 @@ impl App {
         pf.player.render(w, h);
         g.canvas.set_size(w as u32, h as u32, 1.0);
         g.canvas.save();
-        if pf.screen.rotation != 0 {
-            // Draw in the rotated (portrait/landscape) frame the player sees.
+        // Draw in the frame the player sees: on a cabinet the playfield is
+        // usually mounted turned, so the menu is rotated to face them.
+        let rot = (pf.screen.rotation + self.ui_rotation).rem_euclid(360);
+        let (lw, lh) = if rot % 180 == 0 { (w, h) } else { (h, w) };
+        if rot != 0 {
             g.canvas.translate(w as f32 / 2.0, h as f32 / 2.0);
-            g.canvas.rotate((pf.screen.rotation as f32).to_radians());
-            let (rw, rh) = if pf.screen.rotation % 180 == 0 { (w, h) } else { (h, w) };
-            g.canvas.translate(-(rw as f32) / 2.0, -(rh as f32) / 2.0);
+            g.canvas.rotate((rot as f32).to_radians());
+            g.canvas.translate(-(lw as f32) / 2.0, -(lh as f32) / 2.0);
         }
-        let (lw, lh) = if pf.screen.rotation % 180 == 0 { (w, h) } else { (h, w) };
         let fade = if g.shown == sel { ((now - g.swapped_at) / wheel::MEDIA_FADE).min(1.0) } else { 1.0 };
         let frame = wheel::Frame { style, wheel: &g.wheel, entries: &g.entries, fonts: &g.fonts, video_fade: fade };
         wheel::draw(&mut g.canvas, lw as f32, lh as f32, &frame);

@@ -3,6 +3,9 @@
 //! ```toml
 //! [wheel]
 //! style = "arc"   # or "flow"
+//!
+//! [playfield]
+//! ui_rotation = 270   # default: Popper's ThumbRotate
 //! ```
 
 use serde::Deserialize;
@@ -40,9 +43,18 @@ pub struct WheelSettings {
 }
 
 #[derive(Debug, Default, Deserialize)]
+pub struct PlayfieldSettings {
+    /// Degrees clockwise to turn the menu so it faces the player.
+    /// Defaults to Popper's own setting (GlobalSettings.ThumbRotate).
+    pub ui_rotation: Option<i32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub wheel: WheelSettings,
+    #[serde(default)]
+    pub playfield: PlayfieldSettings,
 }
 
 impl Settings {

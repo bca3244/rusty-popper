@@ -107,6 +107,13 @@ impl PopperDb {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Popper's menu rotation (GlobalSettings.ThumbRotate, degrees clockwise):
+    /// how the wheel is turned to face the player on a rotated playfield.
+    pub fn menu_rotation(&self) -> Result<i32> {
+        let v: rusqlite::types::Value = self.conn.query_row("SELECT ThumbRotate FROM GlobalSettings LIMIT 1", [], |r| r.get(0))?;
+        Ok(opt_int(v).unwrap_or(0) as i32)
+    }
+
     pub fn functions(&self) -> Result<Vec<Function>> {
         let mut st = self.conn.prepare(
             "SELECT fIndex, Descript, CntrlCodes, JoyCodes, Active FROM PinUPFunctions ORDER BY fIndex",

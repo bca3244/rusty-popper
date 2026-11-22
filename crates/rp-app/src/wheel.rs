@@ -8,6 +8,7 @@ use femtovg::{renderer::OpenGl, Align, Baseline, Canvas, Color, FontId, ImageId,
 use std::f32::consts::PI;
 
 pub const DESIGN_H: f32 = 1080.0;
+pub const DESIGN_W: f32 = 1920.0;
 /// Delay after the selection settles before media on the screens is swapped.
 pub const MEDIA_DEBOUNCE: f32 = 0.16;
 /// Fade-in time of the new playfield video after a swap.
@@ -102,26 +103,29 @@ type Cv = Canvas<OpenGl>;
 
 /// Draws the overlay for a `w`x`h` px screen. The canvas must already be sized.
 pub fn draw(cv: &mut Cv, w: f32, h: f32, f: &Frame) {
-    let s = h / DESIGN_H;
-    let vw = w / s;
+    // The design is 1080 units on the short side, so a portrait playfield gets
+    // the same element sizes as a landscape one (1080 wide, extra height above
+    // the wheel); horizontal spacing is compressed in draw_flow.
+    let s = (h / DESIGN_H).min(w / DESIGN_H);
+    let (vw, dh) = (w / s, h / s);
     cv.save();
     cv.scale(s, s);
 
     if f.video_fade < 1.0 {
-        fill_rect(cv, 0.0, 0.0, vw, DESIGN_H, Color::rgbaf(0.0, 0.0, 0.0, 1.0 - ease_out(f.video_fade)));
+        fill_rect(cv, 0.0, 0.0, vw, dh, Color::rgbaf(0.0, 0.0, 0.0, 1.0 - ease_out(f.video_fade)));
     }
     // Darken the top for the info text and the bottom behind the wheel.
     let mut p = Path::new();
-    p.rect(0.0, 0.0, vw, DESIGN_H * 0.42);
-    cv.fill_path(&p, &Paint::linear_gradient(0.0, 0.0, 0.0, DESIGN_H * 0.42, Color::rgbaf(0.012, 0.016, 0.03, 0.7), Color::rgbaf(0.012, 0.016, 0.03, 0.0)));
+    p.rect(0.0, 0.0, vw, 450.0);
+    cv.fill_path(&p, &Paint::linear_gradient(0.0, 0.0, 0.0, 450.0, Color::rgbaf(0.012, 0.016, 0.03, 0.7), Color::rgbaf(0.012, 0.016, 0.03, 0.0)));
     let mut p = Path::new();
-    p.rect(0.0, DESIGN_H * 0.6, vw, DESIGN_H * 0.4);
-    cv.fill_path(&p, &Paint::linear_gradient(0.0, DESIGN_H * 0.6, 0.0, DESIGN_H, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, 0.6)));
+    p.rect(0.0, dh - 430.0, vw, 430.0);
+    cv.fill_path(&p, &Paint::linear_gradient(0.0, dh - 430.0, 0.0, dh, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, 0.6)));
 
     if !f.entries.is_empty() {
         match f.style {
-            WheelStyle::Arc => draw_arc(cv, vw, f),
-            WheelStyle::Flow => draw_flow(cv, vw, f),
+            WheelStyle::Arc => draw_arc(cv, vw, dh, f),
+            WheelStyle::Flow => draw_flow(cv, vw, dh, f),
         }
         draw_info(cv, vw, f);
     }
@@ -212,8 +216,8 @@ fn visible_items(pos: f32, n: usize, range: f32) -> Vec<(usize, f32)> {
     items
 }
 
-fn draw_arc(cv: &mut Cv, vw: f32, f: &Frame) {
-    let (r, step, cx, sy) = (1500.0f32, 0.205f32, vw / 2.0, 840.0f32);
+fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
+    let (r, step, cx, sy) = (1500.0f32, 0.205f32, vw / 2.0, dh - 240.0);
     let cy = sy + r;
     let sel = &f.entries[f.wheel.selected()];
 
@@ -243,8 +247,8 @@ fn draw_arc(cv: &mut Cv, vw: f32, f: &Frame) {
     }
 }
 
-fn draw_flow(cv: &mut Cv, vw: f32, f: &Frame) {
-    let (cx, y0, focal) = (vw / 2.0, 760.0f32, 1600.0f32);
+fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
+    let (cx, y0, focal) = (vw / 2.0, dh - 320.0, 1600.0f32);
     const STRIPS: usize = 22;
     let sel = &f.entries[f.wheel.selected()];
     fill_rect(cv, 0.0, y0 + 182.0, vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
@@ -255,7 +259,8 @@ fn draw_flow(cv: &mut Cv, vw: f32, f: &Frame) {
         let a = d.abs();
         let sgn = d.signum();
         let a1 = a.min(1.0);
-        let off = (a1 * 400.0 + (a - 1.0).max(0.0) * 135.0) * sgn;
+        let squeeze = (vw / DESIGN_W).clamp(0.6, 1.0);
+        let off = (a1 * 400.0 + (a - 1.0).max(0.0) * 135.0) * sgn * squeeze;
         let theta = -sgn * a1 * 1.2;
         let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
         let (w, hgt) = fit(aspect, 520.0, 330.0);
@@ -330,10 +335,14 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     if !e.subtitle.is_empty() {
         let _ = cv.fill_text(x + off, y, &e.subtitle, &text(f.fonts.mono, 26.0, hue_color(hue, 0.9, 0.72, a), Align::Left));
     }
-    // Title with a soft dark shadow for legibility over bright video.
-    let title_shadow = text(f.fonts.display, 92.0, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
+    // Title with a soft dark shadow, shrunk to fit long names.
+    let max_w = vw - 2.0 * x;
+    let probe = text(f.fonts.display, 92.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), Align::Left);
+    let tw = cv.measure_text(0.0, 0.0, &e.title, &probe).map(|m| m.width()).unwrap_or(0.0);
+    let size = if tw > max_w { (92.0 * max_w / tw).max(40.0) } else { 92.0 };
+    let title_shadow = text(f.fonts.display, size, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
     let _ = cv.fill_text(x + off * 1.6 + 3.0, y + 95.0, &e.title, &title_shadow);
-    let _ = cv.fill_text(x + off * 1.6, y + 92.0, &e.title, &text(f.fonts.display, 92.0, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
+    let _ = cv.fill_text(x + off * 1.6, y + 92.0, &e.title, &text(f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
 
     let mut chip_x = x + off * 2.0;
     for chip in &e.chips {
