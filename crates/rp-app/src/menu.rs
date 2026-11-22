@@ -75,14 +75,40 @@ impl App {
                 })
             })
             .unwrap_or(0);
-        let image = self.lib.items[item].media(slot).filter(|p| !is_video(p)).and_then(|p| match image::open(&p) {
-            Ok(im) => Some(im.to_rgba8()),
-            Err(e) => {
-                log::warn!("Card {}: {e}", p.display());
-                None
-            }
+        // Decoding a big PNG takes a moment: do it off the UI thread so the
+        // videos keep playing, and upload it when it arrives.
+        let pending = self.lib.items[item].media(slot).filter(|p| !is_video(p)).map(|p| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let im = match image::open(&p) {
+                    Ok(im) => Some(im.to_rgba8()),
+                    Err(e) => {
+                        log::warn!("Card {}: {e}", p.display());
+                        None
+                    }
+                };
+                let _ = tx.send(im);
+            });
+            rx
         });
-        let image = image.and_then(|im| {
+        log::info!("{:?} card for {} on {:?}: {}", kind, self.lib.items[item].title, g.outs[out].screen.slot, if pending.is_some() { "loading" } else { "none" });
+        self.sounds.play(sfx::Sfx::Select);
+        self.close_card();
+        self.card = Some(overlay::Card { kind, image: None, opened: Instant::now(), out, pending });
+    }
+
+    /// Uploads a card image once its decode has finished.
+    pub(crate) fn poll_card(&mut self) {
+        let Some(card) = self.card.as_mut() else { return };
+        let Some(rx) = card.pending.as_ref() else { return };
+        let im = match rx.try_recv() {
+            Ok(im) => im,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+        };
+        card.pending = None;
+        let Some(g) = self.gfx.as_mut() else { return };
+        card.image = im.and_then(|im| {
             use femtovg::rgb::FromSlice;
             let (w, h) = im.dimensions();
             g.context.make_current(&g.outs[0].surface).ok()?;
@@ -92,9 +118,8 @@ impl App {
                 .ok()?;
             Some((id, w as f32, h as f32))
         });
-        log::info!("{:?} card for {} on {:?}: {}", kind, self.lib.items[item].title, g.outs[out].screen.slot, if image.is_some() { "shown" } else { "none" });
-        self.sounds.play(sfx::Sfx::Select);
-        self.card = Some(overlay::Card { kind, image, opened: Instant::now(), out });
+        // Fade in from now, and give a missing card its full time on screen.
+        card.opened = Instant::now();
     }
 
     pub(crate) fn close_card(&mut self) {
@@ -305,7 +330,7 @@ impl App {
     /// Attract mode: after a while with no input, hop to a random game every
     /// few seconds until any button is pressed.
     pub(crate) fn attract_tick(&mut self) {
-        if !self.attract.enabled || self.menu.is_some() || self.playing.is_some() || self.view.len() < 2 {
+        if !self.attract.enabled || self.menu.is_some() || self.card.is_some() || self.playing.is_some() || self.view.len() < 2 {
             return;
         }
         let now = Instant::now();

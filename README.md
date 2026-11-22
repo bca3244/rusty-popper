@@ -14,7 +14,7 @@ Rusty Popper replaces **PinUpMenu.exe** only. Everything else stays as Popper se
 - **Playlists as wheels:** Popper's playlists sit on the wheel where it wraps from the last game back to the first.
 - **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, and **menu sounds** from Popper's own sound set.
 - **Play statistics** written back to Popper, so "Most Played" keeps working.
-- **Updates itself:** it tells you when a new release is out and installs it from the Options menu, with automatic rollback.
+- **Updates itself:** it tells you when a new release is out and installs it from the Options menu, and goes back to the previous version if the new one won't start.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ Rusty Popper replaces **PinUpMenu.exe** only. Everything else stays as Popper se
    - `rusty-popper.toml`, your settings, and `rusty-popper.example.toml`, which lists every option
    - `Enable-RustyPopperStartup.ps1` and `Disable-RustyPopperStartup.ps1`, for starting at boot
 3. **Close Popper** if it's running, then **run `rusty-popper.exe`** to try it.
-   - It finds Popper by itself: the default `C:\vPinball\PinUPSystem` first, then where Windows has PinUpPlayer registered, then the usual install folders on every drive. Whatever it finds is saved to `rusty-popper.toml`.
+   - It finds Popper by itself: the default `C:\vPinball\PinUPSystem` first, then where Windows has PinUpPlayer registered, then the usual install folders on every drive. If it had to search, the folder it found is saved to `rusty-popper.toml` so the next start goes straight there.
    - If it can't start (Popper not found, `libmpv-2.dll` missing), it shows a message saying why. More detail is in `rusty-popper.log` next to the exe.
 4. **Start it at boot (optional).** Right-click `Enable-RustyPopperStartup.ps1` and choose *Run with PowerShell*. It asks for administrator rights. It creates a "Run Rusty Popper" logon task and disables Popper's own "Run Pinup Popper" task, so only one front end starts.
 
@@ -77,10 +77,10 @@ To install it, go to **Exit → Options → Install update vX**. Rusty Popper th
 
 1. downloads the release
 2. checks it against the SHA-256 checksum GitHub publishes for it, and refuses it if they don't match
-3. replaces its files, keeping the old ones in `rollback\` (your `rusty-popper.toml` is never touched)
+3. replaces its files all at once, keeping the old ones in `rollback\` (your `rusty-popper.toml` is never touched). If any file can't be replaced, nothing changes.
 4. restarts into the new version
 
-If the new version fails to start, the old files are put back and the old version starts again automatically. Updates never install during a game.
+If the new version stops with an error during startup, or fails to stay up through three starts in a row, the old files are put back and the old version starts again. Once the new version has run for a minute it counts as good, and the download is cleaned up. `rollback\` keeps the previous version until the next update, so you can also go back by hand by copying its files over. Updates never install during a game.
 
 To turn the startup check off, set `check = false` under `[update]` in `rusty-popper.toml`. To update by hand instead, download the new zip and copy `rusty-popper.exe` (and `libmpv-2.dll`, if it changed) over the old ones, keeping your own `rusty-popper.toml`.
 
@@ -107,7 +107,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
   - `rusty-popper.log`, for troubleshooting
   - `rusty-popper.toml`, when you change Options
   - `last-playlist.txt`
-  - during updates, `update\` and `rollback\`
+  - `update\` while an update downloads (removed once the new version is confirmed), and `rollback\`, which holds the previous version
 
 Nothing else of Popper's is changed. Rusty Popper notices when the database changes (tables added in Popper's setup or VPin Studio, playlists edited) and picks the changes up without a restart.
 

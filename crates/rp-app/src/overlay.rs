@@ -17,6 +17,8 @@ pub struct Card {
     /// The card image and its size, or None when the game has no card.
     pub image: Option<(ImageId, f32, f32)>,
     pub opened: Instant,
+    /// The image while it's still being decoded off the UI thread.
+    pub pending: Option<std::sync::mpsc::Receiver<Option<image::RgbaImage>>>,
     /// Which screen (index into the outputs) shows it.
     pub out: usize,
 }
@@ -26,7 +28,7 @@ pub const MISSING_SECS: f32 = 2.0;
 
 impl Card {
     pub fn expired(&self) -> bool {
-        self.image.is_none() && self.opened.elapsed().as_secs_f32() > MISSING_SECS
+        self.image.is_none() && self.pending.is_none() && self.opened.elapsed().as_secs_f32() > MISSING_SECS
     }
 }
 
@@ -46,6 +48,7 @@ pub fn draw(cv: &mut Canvas<OpenGl>, w: f32, h: f32, card: &Card, fonts: &Fonts)
             p.rect(x, y, dw, dh);
             cv.fill_path(&p, &Paint::image(img, x, y, dw, dh, 0.0, a));
         }
+        None if card.pending.is_some() => {}
         None => {
             let what = if card.kind == CardKind::Info { "info" } else { "help" };
             let size = (w.min(h) * 0.05).max(24.0);

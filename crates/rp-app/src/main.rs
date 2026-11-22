@@ -94,6 +94,11 @@ static RESTARTED: AtomicU32 = AtomicU32::new(0);
 /// Set while the menu's windows are up: a crash then restarts the menu.
 static MENU_UP: AtomicBool = AtomicBool::new(false);
 static STARTED: OnceLock<Instant> = OnceLock::new();
+/// This run counted as a try of a freshly installed update.
+static PROBATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// A fresh copy has already been started, so this one must not roll back or
+/// show an error box over it.
+static SELF_RESTARTED: AtomicBool = AtomicBool::new(false);
 
 struct Args {
     popper: Option<PathBuf>,
@@ -180,7 +185,8 @@ fn main() {
             log::logger().flush();
             // A freshly installed update that can't start goes straight back
             // to the previous version.
-            if updater::on_probation(&exe_dir()) {
+            let handed_over = SELF_RESTARTED.load(Ordering::Relaxed);
+            if !handed_over && PROBATION_ACTIVE.load(Ordering::Relaxed) && updater::on_probation(&exe_dir()) {
                 if let Err(r) = updater::rollback(&exe_dir(), &format!("{e:#}")) {
                     log::error!("Rollback failed: {r:#}");
                 } else {
@@ -190,10 +196,12 @@ fn main() {
             }
             // Started at logon there's no console, so say what went wrong on
             // screen rather than leaving a bare desktop.
-            win::show_error(
+            if !handed_over {
+                win::show_error(
                 "Rusty Popper couldn't start",
-                &format!("{e:#}\n\nMore detail is in rusty-popper.log next to rusty-popper.exe."),
-            );
+                    &format!("{e:#}\n\nMore detail is in rusty-popper.log next to rusty-popper.exe."),
+                );
+            }
             1
         }
     };
@@ -205,21 +213,23 @@ fn run() -> Result<()> {
     let args = parse_args()?;
     RESTARTED.store(args.restarted, Ordering::Relaxed);
     log::info!("Rusty Popper {} starting", env!("CARGO_PKG_VERSION"));
-    if updater::start_probation(&exe_dir()) == updater::Probation::GiveUp {
-        updater::rollback(&exe_dir(), "the new version kept failing to start")?;
-        return Ok(());
+    // Only a real menu start counts as a try of a new version (not --list etc.).
+    let ui_run = !(args.list || args.dry_run || args.print_launch);
+    if ui_run {
+        match updater::start_probation(&exe_dir()) {
+            updater::Probation::GiveUp => match updater::rollback(&exe_dir(), "the new version kept failing to start") {
+                Ok(()) => return Ok(()),
+                // Nothing to go back to: carry on with this version.
+                Err(e) => log::error!("Rollback failed, staying on {}: {e:#}", env!("CARGO_PKG_VERSION")),
+            },
+            updater::Probation::OnProbation => PROBATION_ACTIVE.store(true, Ordering::Relaxed),
+            updater::Probation::None => {}
+        }
     }
     let settings = Settings::load(&exe_dir().join("rusty-popper.toml"));
     let style = args.wheel.unwrap_or(settings.wheel.style);
     let found = discover::find_popper(args.popper.clone(), settings.paths.popper_dir.clone())?;
     let popper = found.dir;
-    if found.searched {
-        // Remember it so the next start goes straight there.
-        match settings::save_popper_dir(&exe_dir().join("rusty-popper.toml"), &popper) {
-            Ok(()) => log::info!("Saved popper_dir = {} to rusty-popper.toml", popper.display()),
-            Err(e) => log::warn!("Couldn't save popper_dir to rusty-popper.toml: {e:#}"),
-        }
-    }
 
     rp_launch::remove_stale_temp_files();
     let db_seen = db_mtime(&popper);
@@ -284,6 +294,14 @@ fn run() -> Result<()> {
     log::info!("libmpv: {}", dll.display());
     if args.dry_run {
         return Ok(());
+    }
+
+    if found.searched && ui_run {
+        // Remember it so the next start goes straight there.
+        match settings::save_popper_dir(&exe_dir().join("rusty-popper.toml"), &popper) {
+            Ok(()) => log::info!("Saved popper_dir = {} to rusty-popper.toml", popper.display()),
+            Err(e) => log::warn!("Couldn't save popper_dir to rusty-popper.toml: {e:#}"),
+        }
     }
 
     let volume = settings.audio.volume.unwrap_or_else(|| screens.iter().find(|s| s.slot == Slot::PlayField).map_or(100, |s| s.volume)).clamp(0, 100);
@@ -374,8 +392,9 @@ fn restart_self() {
     }
     log::warn!("Restarting the menu (attempt {})", restarted + 1);
     std::thread::sleep(Duration::from_secs(2));
-    if let Err(e) = std::process::Command::new(exe).args(passed).arg("--restarted").arg((restarted + 1).to_string()).spawn() {
-        log::error!("Couldn't restart: {e}");
+    match std::process::Command::new(exe).args(passed).arg("--restarted").arg((restarted + 1).to_string()).spawn() {
+        Ok(_) => SELF_RESTARTED.store(true, Ordering::Relaxed),
+        Err(e) => log::error!("Couldn't restart: {e}"),
     }
 }
 
