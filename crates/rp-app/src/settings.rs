@@ -238,6 +238,22 @@ pub fn save(path: &Path, v: &Editable) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Remembers where Popper was found: sets `[paths] popper_dir`, keeping the
+/// rest of rusty-popper.toml as it is.
+pub fn save_popper_dir(path: &Path, dir: &Path) -> anyhow::Result<()> {
+    use toml_edit::{value, DocumentMut, Item, Table};
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: DocumentMut = text.parse()?;
+    if !doc.contains_table("paths") {
+        doc.insert("paths", Item::Table(Table::new()));
+    }
+    doc["paths"]["popper_dir"] = value(dir.display().to_string());
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

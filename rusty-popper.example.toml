@@ -31,6 +31,9 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # ignore_processes = ["somehelper.exe"]
 
 [paths]
+# Found automatically if not set: the default folder, then where Windows
+# has PinUpPlayer registered, then the usual folders on every drive. The
+# folder it finds is saved here.
 # popper_dir = 'C:\vPinball\PinUPSystem'      # default
 # mpv_dll = 'C:\somewhere\libmpv-2.dll'       # default: next to the exe
 
