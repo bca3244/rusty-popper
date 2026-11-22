@@ -57,7 +57,7 @@ pub struct Function {
     pub name: String,
     /// Windows virtual-key code, if bound.
     pub key: Option<i64>,
-    /// 1-based joystick button, if bound.
+    /// 0-based joystick button (Popper numbering), if bound.
     pub joy_button: Option<i64>,
     pub active: bool,
 }
@@ -208,7 +208,8 @@ impl PopperDb {
                 index: r.get(0)?,
                 name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 key: opt_int(r.get(2)?).filter(|k| *k > 0),
-                joy_button: opt_int(r.get(3)?).filter(|b| *b > 0),
+                // Popper stores 0-based buttons, with 99 standing for button 0 and -1 for none.
+                joy_button: opt_int(r.get(3)?).filter(|b| *b >= 0).map(|b| if b == 99 { 0 } else { b }),
                 active: opt_int(r.get(4)?).unwrap_or(0) != 0,
             })
         })?;

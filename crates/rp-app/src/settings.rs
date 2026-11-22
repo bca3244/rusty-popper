@@ -8,9 +8,10 @@
 //! ui_rotation = 270   # default: Popper's ThumbRotate
 //!
 //! [input]
-//! menu_joy_buttons = [10]   # extra buttons that open the exit menu
-//! letter_prev_joy_buttons = [2]
-//! letter_next_joy_buttons = [4]
+//! # Optional: buttons are normally taken from Popper's controller setup.
+//! menu_joy_buttons = []
+//! letter_prev_joy_buttons = []
+//! letter_next_joy_buttons = []
 //! playlist_joy_buttons = []
 //!
 //! [attract]
@@ -62,7 +63,7 @@ pub struct PlayfieldSettings {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct InputSettings {
-    /// Extra joystick buttons (1-based) that open the exit menu, on top of
+    /// Optional extra joystick buttons (Popper numbering, 0-based) that open the exit menu, on top of
     /// Popper's System Menu / Exit bindings.
     #[serde(default)]
     pub menu_joy_buttons: Vec<u32>,

@@ -720,12 +720,11 @@ impl App {
         match action {
             Menu => self.menu = Some(ExitMenu { kind: MenuKind::Exit, selected: 0, opened: Instant::now() }),
             Playlists => self.menu = Some(ExitMenu { kind: MenuKind::Playlists, selected: self.playlist, opened: Instant::now() }),
-            // On Brian's cabinet Popper's "Page" functions sit on the flipper
-            // buttons and step one game, so they do the same here.
-            Prev | PagePrev => g.wheel.step(-1),
-            Next | PageNext => g.wheel.step(1),
-            LetterPrev => self.jump_letter(-1),
-            LetterNext => self.jump_letter(1),
+            Prev => g.wheel.step(-1),
+            Next => g.wheel.step(1),
+            // Popper's Page Prior/Next (usually the magna-saves) jump by letter.
+            PagePrev | LetterPrev => self.jump_letter(-1),
+            PageNext | LetterNext => self.jump_letter(1),
             ToggleStyle => self.style = self.style.toggled(),
             Start => {
                 if let Some(&item) = self.view.get(g.wheel.selected()) {
