@@ -50,6 +50,8 @@ pub struct Playlist {
     pub name: String,
     /// Set for SQL playlists (PlayListType 1).
     pub sql: Option<String>,
+    /// Media name (PlayLists.Logo) under POPMedia\Default, e.g. `pl_Music`.
+    pub logo: Option<String>,
 }
 
 /// One row of PinUPFunctions: a menu action and its keyboard / joystick binding.
@@ -151,7 +153,7 @@ impl PopperDb {
     /// Visible playlists in Popper's display order.
     pub fn playlists(&self) -> Result<Vec<Playlist>> {
         let mut st = self.conn.prepare(
-            "SELECT PlayListID, PlayName, PlayListType, PlayListSQL FROM PlayLists
+            "SELECT PlayListID, PlayName, PlayListType, PlayListSQL, Logo FROM PlayLists
              WHERE Visible = 1 ORDER BY DisplayOrder, PlayListID",
         )?;
         let rows = st.query_map([], |r| {
@@ -159,6 +161,7 @@ impl PopperDb {
                 id: r.get(0)?,
                 name: opt_text(r.get(1)?).unwrap_or_else(|| "Playlist".into()),
                 sql: if opt_int(r.get(2)?) == Some(1) { opt_text(r.get(3)?) } else { None },
+                logo: opt_text(r.get(4)?),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
