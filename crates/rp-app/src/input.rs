@@ -1,5 +1,6 @@
 //! Menu input: keyboard (winit) plus joystick buttons (winmm, the same
-//! 1-based button numbers Popper stores in PinUPFunctions.JoyCodes).
+//! 0-based button numbers Popper stores in PinUPFunctions.JoyCodes, where 99
+//! means button 0).
 
 use rp_db::Function;
 use std::time::{Duration, Instant};
@@ -75,11 +76,11 @@ impl Bindings {
             if let Some(code) = f.key.and_then(vk_to_keycode) {
                 keys.push((code, action));
             }
-            if let Some(b) = f.joy_button.filter(|b| (1..=32).contains(b)) {
+            if let Some(b) = f.joy_button.filter(|b| (0..32).contains(b)) {
                 joy.push((b as u32, action));
             }
         }
-        for &(b, action) in joy_overrides.iter().filter(|(b, _)| (1..=32).contains(b)) {
+        for &(b, action) in joy_overrides.iter().filter(|(b, _)| *b < 32) {
             joy.retain(|(jb, _)| *jb != b);
             joy.push((b, action));
         }
@@ -193,7 +194,7 @@ impl Joysticks {
         for &id in &self.ids {
             let Some(buttons) = Self::read(id) else { continue };
             for &(b, _) in &bindings.joy {
-                if buttons & (1 << (b - 1)) != 0 {
+                if buttons & (1 << b) != 0 {
                     self.held.push((id, b, now, now + Duration::from_secs(3600)));
                 }
             }
@@ -212,7 +213,7 @@ impl Joysticks {
         for &id in &self.ids {
             let Some(buttons) = Self::read(id) else { continue };
             for &(b, action) in &bindings.joy {
-                if buttons & (1 << (b - 1)) == 0 {
+                if buttons & (1 << b) == 0 {
                     continue;
                 }
                 match self.held.iter().find(|h| h.0 == id && h.1 == b) {
