@@ -13,8 +13,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # A fixed toolchain, so a new compiler's lints can't fail an unrelated
+      # change. Raise it on purpose now and then.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.100.0
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Build

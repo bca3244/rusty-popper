@@ -12,21 +12,37 @@ impl App {
         let Some(p) = self.playing.as_mut() else { return Ok(()) };
         match p.rx.try_recv() {
             Ok(result) => {
+                // After a game that ran (or was closed by the player) the menu
+                // takes the focus back; if nothing ever started, whatever the
+                // player switched to meanwhile keeps it.
+                let ran = p.ctl.stop_requested() || matches!(result, Ok(rp_launch::Outcome::Finished { .. }));
                 match result {
                     Ok(outcome) => log::info!("Back from game ({outcome:?})"),
                     Err(e) => log::error!("Launch failed: {e:#}"),
                 }
-                self.return_from_game(el);
+                self.return_from_game(el, ran);
                 return Ok(());
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("The game thread ended without a result");
-                self.return_from_game(el);
+                self.return_from_game(el, true);
                 return Ok(());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
-        let phase = p.ctl.phase();
+        let mut phase = p.ctl.phase();
+        // The emulator's process shows up long before the table does. Until
+        // its window covers one of our screens, this is still "Launching".
+        if phase == Phase::Playing && !p.game_up {
+            let seen = *p.process_since.get_or_insert_with(Instant::now);
+            let rects: Vec<(i32, i32, i32, i32)> = self.screens.iter().map(|s| (s.x, s.y, s.width, s.height)).collect();
+            if win::foreground(&rects) == win::Foreground::Other || seen.elapsed() >= GAME_UP_TIMEOUT {
+                log::info!("Game on screen after {:.1}s", p.since.elapsed().as_secs_f32());
+                p.game_up = true;
+            } else {
+                phase = Phase::Launching;
+            }
+        }
         if let Some(g) = self.gfx.as_mut() {
             // Popper's "Exit Emulators" button closes the game, whichever
             // window has the focus (ignored for a moment after Start).
@@ -96,6 +112,8 @@ impl App {
         }
         let kept_video = g.outs.iter().any(|o| emu.keep_displays.contains(&(o.screen.slot as u32)) && item.media(o.screen.slot).is_some_and(|m| is_video(&m)));
         g.joysticks.arm_exit(&self.bindings);
+        // Logos still being loaded would only pile up while the game runs.
+        g.logos = assets::idle();
         let (tx, rx) = std::sync::mpsc::channel();
         let ctl = Arc::new(rp_launch::Control::default());
         let worker_ctl = ctl.clone();
@@ -125,6 +143,8 @@ impl App {
             ctl,
             index,
             since: Instant::now(),
+            process_since: None,
+            game_up: false,
             exiting_since: None,
             others_paused: false,
             kept_video,
@@ -133,19 +153,24 @@ impl App {
         });
     }
 
-    /// Brings the menu back after a game: screens, video, logos and focus.
-    pub(crate) fn return_from_game(&mut self, el: &ActiveEventLoop) {
+    /// Brings the menu back after a game: screens, video, logos and (when
+    /// `take_focus`) the keyboard focus, even from another program.
+    pub(crate) fn return_from_game(&mut self, el: &ActiveEventLoop, take_focus: bool) {
         self.playing = None;
         el.set_control_flow(ControlFlow::Poll);
         let now = Instant::now();
         // Time in the game isn't idle time: attract mode waits its full delay again.
         self.last_input = now;
-        self.reclaim_until = now + RECLAIM_AFTER_GAME;
+        if take_focus {
+            self.reclaim_until = now + RECLAIM_AFTER_GAME;
+        }
         // Our own statistics write changed the file; pick up anything else
         // that changed while the game ran, too.
         self.db_seen = db_mtime(&self.popper_dir);
         self.db_dirty_since = None;
         self.last_db_check = now;
+        // A re-read begun before the statistics were written would be stale.
+        self.reload = None;
         self.start_reload();
         let Some(g) = self.gfx.as_mut() else { return };
         let item = &self.lib.items[g.shown];
@@ -155,7 +180,11 @@ impl App {
             o.show(item.media(o.screen.slot).as_deref());
         }
         g.load_logos(&self.lib.items, g.shown);
-        win::force_foreground(g.pf_hwnd);
+        if take_focus {
+            win::force_foreground(g.pf_hwnd);
+        } else {
+            win::request_foreground(g.pf_hwnd);
+        }
         self.last_reclaim = now;
         // Buttons still held from the game (e.g. Exit) must not fire in the menu.
         g.joysticks.swallow_held(&self.bindings);
@@ -194,8 +223,9 @@ impl App {
         g.canvas.set_size(w as u32, h as u32, 1.0);
         g.canvas.save();
         let (lw, lh) = face_player(&mut g.canvas, w, h, (pf.screen.rotation + ui_rotation).rem_euclid(360));
-        // Once the game is up, the screen behind it already reads "Exiting", so
-        // that's what shows the moment the table closes (not a stale "Launching").
+        // Once the game is on screen, the screen behind it already reads
+        // "Exiting", so that's what shows the moment the table closes (not a
+        // stale "Launching").
         let verb = if phase == rp_launch::Phase::Launching { "Launching" } else { "Exiting" };
         wheel::draw_launch(&mut g.canvas, lw, lh, &g.entries[index], verb, item.emu_name(), t, &g.fonts);
         g.canvas.restore();

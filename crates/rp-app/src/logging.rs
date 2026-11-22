@@ -48,7 +48,7 @@ impl log::Log for Logger {
     }
 }
 
-/// Starts logging to `path` (appending), and records panics there too.
+/// Starts logging to `path` (appending).
 pub fn init(path: &Path) {
     if std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
         let _ = std::fs::rename(path, path.with_extension("old.log"));
@@ -58,7 +58,4 @@ pub fn init(path: &Path) {
     if log::set_logger(logger).is_ok() {
         log::set_max_level(log::LevelFilter::Info);
     }
-    std::panic::set_hook(Box::new(|info| {
-        log::error!("panic: {info}");
-    }));
 }

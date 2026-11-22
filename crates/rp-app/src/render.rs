@@ -181,6 +181,7 @@ impl App {
         let now = (now_i - g.t0).as_secs_f64();
 
         // Upload any logos the loader finished (a few per frame to avoid hitches).
+        g.context.make_current(&g.outs[0].surface)?;
         for logo in g.logos.try_iter().take(4) {
             let upload = |c: &mut Canvas<OpenGl>, img: &image::RgbaImage| {
                 use femtovg::rgb::FromSlice;
@@ -188,10 +189,13 @@ impl App {
                 c.create_image(femtovg::imgref::Img::new(img.as_raw().as_rgba(), w as usize, h as usize), ImageFlags::empty())
             };
             let Some(entry) = g.entries.get_mut(logo.index).filter(|e| e.logo.is_none()) else { continue };
-            g.context.make_current(&g.outs[0].surface)?;
-            if let (Ok(img), Ok(glow)) = (upload(&mut g.canvas, &logo.rgba), upload(&mut g.canvas, &logo.glow)) {
-                let (w, h) = logo.rgba.dimensions();
-                entry.logo = Some(wheel::LogoTex { img, glow, aspect: w as f32 / h as f32, hue: logo.hue });
+            let Ok(img) = upload(&mut g.canvas, &logo.rgba) else { continue };
+            match upload(&mut g.canvas, &logo.glow) {
+                Ok(glow) => {
+                    let (w, h) = logo.rgba.dimensions();
+                    entry.logo = Some(wheel::LogoTex { img, glow, aspect: w as f32 / h as f32, hue: logo.hue });
+                }
+                Err(_) => g.canvas.delete_image(img),
             }
         }
 

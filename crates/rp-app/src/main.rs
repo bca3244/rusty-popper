@@ -43,8 +43,9 @@ use settings::{Settings, WheelStyle};
 use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -80,6 +81,18 @@ const MIN_FRAME: Duration = Duration::from_millis(4);
 const MAX_FRAME_ERRORS: u32 = 200;
 /// How many times in a row the menu restarts itself before giving up.
 const MAX_RESTARTS: u32 = 3;
+/// A menu that ran this long before failing wasn't part of a row of failures:
+/// its restart counts as the first.
+const HEALTHY_UPTIME: Duration = Duration::from_secs(300);
+/// If the game's window hasn't been seen by then, the game counts as on
+/// screen this long after its process appeared.
+const GAME_UP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How many restarts in a row led to this run (`--restarted`).
+static RESTARTED: AtomicU32 = AtomicU32::new(0);
+/// Set while the menu's windows are up: a crash then restarts the menu.
+static MENU_UP: AtomicBool = AtomicBool::new(false);
+static STARTED: OnceLock<Instant> = OnceLock::new();
 
 struct Args {
     popper: Option<PathBuf>,
@@ -90,7 +103,7 @@ struct Args {
     list: bool,
     dry_run: bool,
     print_launch: bool,
-    /// Set when the menu restarted itself after a rendering failure.
+    /// How many times in a row the menu has restarted itself after a failure.
     restarted: u32,
 }
 
@@ -147,6 +160,18 @@ fn is_video(path: &Path) -> bool {
 fn main() {
     win::attach_parent_console();
     logging::init(&exe_dir().join("rusty-popper.log"));
+    STARTED.get_or_init(Instant::now);
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("panic: {info}");
+        log::logger().flush();
+        // A crash of the menu itself (not of a helper thread, which is coped
+        // with) would bare the desktop: start a fresh copy instead.
+        if std::thread::current().name() == Some("main") && MENU_UP.swap(false, Ordering::Relaxed) {
+            restart_self();
+            log::logger().flush();
+            std::process::exit(101);
+        }
+    }));
     let code = match run() {
         Ok(()) => 0,
         Err(e) => {
@@ -160,6 +185,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    RESTARTED.store(args.restarted, Ordering::Relaxed);
     log::info!("Rusty Popper {} starting", env!("CARGO_PKG_VERSION"));
     let settings = Settings::load(&exe_dir().join("rusty-popper.toml"));
     let style = args.wheel.unwrap_or(settings.wheel.style);
@@ -272,9 +298,12 @@ fn run() -> Result<()> {
         reclaim_until: now + Duration::from_secs(5),
         joy_blocked: false,
     };
-    event_loop.run_app(&mut app)?;
+    MENU_UP.store(true, Ordering::Relaxed);
+    let ran = event_loop.run_app(&mut app);
+    MENU_UP.store(false, Ordering::Relaxed);
+    ran?;
     if app.restart {
-        restart_self(args.restarted);
+        restart_self();
     }
     match app.error {
         Some(e) => Err(e),
@@ -283,8 +312,11 @@ fn run() -> Result<()> {
 }
 
 /// Starts a fresh copy of the menu after rendering broke for good (a display
-/// driver reset, say), so the cabinet isn't left on the desktop.
-fn restart_self(restarted: u32) {
+/// driver reset, say) or the menu crashed, so the cabinet isn't left on the
+/// desktop.
+fn restart_self() {
+    let healthy = STARTED.get().is_some_and(|t| t.elapsed() >= HEALTHY_UPTIME);
+    let restarted = if healthy { 0 } else { RESTARTED.load(Ordering::Relaxed) };
     if restarted >= MAX_RESTARTS {
         log::error!("Rendering keeps failing after {restarted} restarts; giving up");
         return;
@@ -418,8 +450,8 @@ const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
 const OPTION_ROWS: usize = 6; // style, attract, idle, interval, volume, back
 
 fn next_choice(choices: &[u64], cur: u64) -> u64 {
-    let i = choices.iter().position(|&c| c >= cur).map(|i| i + 1).unwrap_or(0);
-    choices[i % choices.len()]
+    let i = choices.iter().position(|&c| c > cur).unwrap_or(0);
+    choices[i]
 }
 
 /// The game currently running.
@@ -429,9 +461,14 @@ struct Playing {
     ctl: Arc<rp_launch::Control>,
     index: usize,
     since: Instant,
+    /// When the game's process was first seen.
+    process_since: Option<Instant>,
+    /// The game's window is on screen (its process appears well before that,
+    /// while the table still loads).
+    game_up: bool,
     /// When the game was seen to exit (restarts the screen's animation).
     exiting_since: Option<Instant>,
-    /// Screens not in KeepDisplays are paused (and black) only while the game itself runs.
+    /// Screens not in KeepDisplays are paused (and black) only while the game is on screen.
     others_paused: bool,
     /// A screen the emulator keeps is showing a video, so it needs real frame rates.
     kept_video: bool,
@@ -591,6 +628,7 @@ impl ApplicationHandler for App {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
+        MENU_UP.store(false, Ordering::Relaxed);
         self.shutdown();
     }
 }
@@ -603,7 +641,7 @@ mod tests {
     fn option_choices_cycle() {
         assert_eq!(next_choice(ATTRACT_IDLE_CHOICES, 60), 120);
         assert_eq!(next_choice(ATTRACT_IDLE_CHOICES, 600), 60);
-        assert_eq!(next_choice(ATTRACT_IDLE_CHOICES, 200), 600); // an off-list value moves to the next step up
+        assert_eq!(next_choice(ATTRACT_IDLE_CHOICES, 200), 300); // an off-list value moves to the next step up
         assert_eq!(next_choice(ATTRACT_INTERVAL_CHOICES, 999), 6);
     }
 

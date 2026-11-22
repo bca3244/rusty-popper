@@ -3,7 +3,8 @@
 
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId};
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
 use windows_sys::Win32::UI::WindowsAndMessaging::{BringWindowToTop, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, SetForegroundWindow};
 
 /// Who owns the foreground (keyboard focus) right now.
@@ -54,21 +55,28 @@ pub fn foreground(screens: &[(i32, i32, i32, i32)]) -> Foreground {
 }
 
 /// Brings `hwnd` (one of our windows, as an integer handle) to the foreground.
-/// Windows refuses a plain SetForegroundWindow from a background process, so
-/// this briefly attaches to the foreground thread's input queue, which is
-/// allowed to hand the foreground over.
-pub fn force_foreground(hwnd: isize) {
+/// Windows refuses a plain SetForegroundWindow from a background process
+/// unless the user has just pressed Alt, so when the plain request fails an
+/// Alt press is sent first. (Nothing here waits on the program in front, so a
+/// hung game can't hang the menu.) Returns whether the window got the focus.
+pub fn force_foreground(hwnd: isize) -> bool {
     let hwnd = hwnd as HWND;
     unsafe {
-        let fg = GetForegroundWindow();
-        let ours = GetCurrentThreadId();
-        let theirs = if fg.is_null() { 0 } else { GetWindowThreadProcessId(fg, std::ptr::null_mut()) };
-        let attached = theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, 1) != 0;
         BringWindowToTop(hwnd);
-        SetForegroundWindow(hwnd);
-        if attached {
-            AttachThreadInput(ours, theirs, 0);
+        if SetForegroundWindow(hwnd) != 0 && GetForegroundWindow() == hwnd {
+            return true;
         }
+        keybd_event(VK_MENU as u8, 0, 0, 0);
+        let taken = SetForegroundWindow(hwnd) != 0;
+        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+        taken
+    }
+}
+
+/// Asks for the foreground without insisting (Windows may say no).
+pub fn request_foreground(hwnd: isize) {
+    unsafe {
+        SetForegroundWindow(hwnd as HWND);
     }
 }
 

@@ -58,6 +58,8 @@ rusty-popper --print-launch --game "addams family"   # show the filled-in launch
 rusty-popper --game "addams family" --seconds 60
 ```
 
+The exe is a windowed program, so a terminal doesn't wait for it and its output can arrive after the next prompt. Use `start /wait rusty-popper --list` (cmd) or `rusty-popper --list | Out-Host` (PowerShell) to wait, or read `rusty-popper.log` next to the exe, which gets everything that is printed.
+
 Popper's folder defaults to `C:\vPinball\PinUPSystem`; change it with `--popper DIR` or `[paths] popper_dir`. Copy `rusty-popper.example.toml` next to the exe as `rusty-popper.toml` for the other settings; most can also be changed in the menu under Exit, Options.
 
 Browse with the buttons Popper has bound (or the arrow keys), Start launches, and the exit button opens the exit menu. While a game runs, Popper's **Exit Emulators** button closes it by running the emulator's close script, like Popper does.

@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use rp_db::{Emulator, Game};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -47,6 +47,14 @@ const KILL_AFTER_NO_SCRIPT: Duration = Duration::from_secs(2);
 /// How often the whole process list is rescanned while a game runs (in
 /// between, only the known game processes are checked).
 const FULL_SCAN_EVERY: Duration = Duration::from_secs(2);
+/// The longest a post (close) script may run before it is ended.
+const POST_SCRIPT_LIMIT: Duration = Duration::from_secs(30);
+/// After the game's processes were killed, how long to wait for them to go
+/// before returning to the menu anyway.
+const GIVE_UP_AFTER_KILL: Duration = Duration::from_secs(5);
+/// After a close request during loading, how long to keep looking for game
+/// processes that only show up now (and end them).
+const LATE_START_WATCH: Duration = Duration::from_secs(10);
 
 /// Everything needed to launch one game.
 #[derive(Debug, Clone)]
@@ -142,9 +150,51 @@ impl Script {
         }
     }
 
-    fn wait(&mut self) {
+    /// Waits for the script, but no longer than `limit`: after that it is
+    /// ended, with whatever it started.
+    fn wait_up_to(&mut self, limit: Duration) {
+        while !self.finished() {
+            if self.started.elapsed() >= limit {
+                log::warn!("{} script still running after {}s; ending it", self.label, limit.as_secs());
+                self.end();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Ends the script and the programs it started, if it is still running.
+    fn end(&mut self) {
+        if self.finished() {
+            return;
+        }
+        taskkill(&[self.child.id()]);
+        let _ = self.child.kill();
         let _ = self.child.wait();
-        self.finished();
+        self.ran = Some(self.started.elapsed());
+        let _ = std::fs::remove_file(&self.bat);
+    }
+}
+
+/// Force-ends processes and everything they started. All are ended at once,
+/// with no console window flashing up.
+fn taskkill(pids: &[u32]) {
+    let children: Vec<Child> = pids
+        .iter()
+        .filter_map(|pid| {
+            let mut cmd = Command::new("taskkill.exe");
+            cmd.args(["/F", "/T", "/PID"]).arg(pid.to_string());
+            cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+            cmd.spawn().map_err(|e| log::warn!("taskkill: {e}")).ok()
+        })
+        .collect();
+    for mut c in children {
+        let _ = c.wait();
     }
 }
 
@@ -236,6 +286,17 @@ impl Tracker {
     fn scan(&mut self) -> Vec<String> {
         let Some(sys) = self.sys.as_mut() else { return Vec::new() };
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet));
+        // A process seen in its first moments can have no readable path yet,
+        // and an empty one is remembered: ask again for those.
+        let pathless: Vec<Pid> = sys
+            .processes()
+            .iter()
+            .filter(|(_, p)| p.start_time() >= self.since && p.exe().is_none_or(|e| e.as_os_str().is_empty()))
+            .map(|(pid, _)| *pid)
+            .collect();
+        if !pathless.is_empty() {
+            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&pathless), false, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+        }
         let mut names = Vec::new();
         self.known.clear();
         for (pid, p) in sys.processes() {
@@ -262,19 +323,16 @@ impl Tracker {
         !self.known.is_empty()
     }
 
-    fn kill_all(&mut self) {
+    /// Ends every game process (and what it started). Returns whether there were any.
+    fn kill_all(&mut self) -> bool {
         let names = self.scan();
         if names.is_empty() {
-            return;
+            return false;
         }
         log::warn!("Game didn't close; ending {}", names.join(", "));
-        if let Some(sys) = &self.sys {
-            for pid in &self.known {
-                if let Some(p) = sys.process(*pid) {
-                    p.kill();
-                }
-            }
-        }
+        let pids: Vec<u32> = self.known.iter().map(|pid| pid.as_u32()).collect();
+        taskkill(&pids);
+        true
     }
 }
 
@@ -401,7 +459,7 @@ impl LaunchJob {
     /// Runs the post (close) script and waits for it.
     fn run_post_script(&self) {
         match self.start_script("post", &self.emulator.post_script) {
-            Ok(Some(mut s)) => s.wait(),
+            Ok(Some(mut s)) => s.wait_up_to(POST_SCRIPT_LIMIT),
             Ok(None) => {}
             Err(e) => log::warn!("{e:#}"),
         }
@@ -448,7 +506,7 @@ impl LaunchJob {
                 break;
             }
             if ctl.stop_requested() {
-                return (Outcome::NeverStarted, false);
+                return (self.close_while_loading(script, tracker, ctl, start), true);
             }
             match script_ran {
                 // The script itself ran for a good while: it was the game.
@@ -467,7 +525,7 @@ impl LaunchJob {
         let mut last_full = Instant::now();
         let mut gone_since: Option<Instant> = None;
         let mut stop_at: Option<Instant> = None;
-        let mut killed = false;
+        let mut killed_at: Option<Instant> = None;
         let has_post = !self.emulator.post_script.trim().is_empty();
         loop {
             if ctl.stop_requested() && stop_at.is_none() {
@@ -478,10 +536,14 @@ impl LaunchJob {
             }
             if let Some(at) = stop_at {
                 let limit = if has_post { KILL_AFTER } else { KILL_AFTER_NO_SCRIPT };
-                if !killed && at.elapsed() >= limit {
-                    killed = true;
+                if killed_at.is_none() && at.elapsed() >= limit {
+                    killed_at = Some(Instant::now());
                     tracker.kill_all();
                 }
+            }
+            if killed_at.is_some_and(|at| at.elapsed() >= GIVE_UP_AFTER_KILL) {
+                log::warn!("Some game processes couldn't be ended; returning to the menu anyway");
+                break;
             }
             // Mostly just check the processes already found; rescan everything
             // now and then (new child processes) and before believing it's over.
@@ -499,6 +561,35 @@ impl LaunchJob {
             std::thread::sleep(Duration::from_millis(250));
         }
         (Outcome::Finished { secs: played.elapsed().as_secs() }, stop_at.is_some())
+    }
+
+    /// A close request while the game was still loading: runs the post
+    /// (close) script, then ends whatever the launch script started, including
+    /// game processes that only show up in the next few seconds.
+    fn close_while_loading(&self, script: &mut Option<Script>, tracker: &mut Tracker, ctl: &Control, start: Instant) -> Outcome {
+        log::info!("Close requested while loading; running post script");
+        ctl.set(Phase::Exiting);
+        self.run_post_script();
+        // A launch script still running after this long was being shown as the game.
+        let blocking = script.as_mut().is_some_and(|s| !s.finished()) && start.elapsed() >= BLOCKING_SCRIPT;
+        if let Some(s) = script.as_mut() {
+            s.end();
+        }
+        let watch = Instant::now();
+        let mut quiet_since: Option<Instant> = None;
+        while watch.elapsed() < LATE_START_WATCH {
+            if tracker.kill_all() {
+                quiet_since = None;
+            } else if quiet_since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_secs(3) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        if blocking {
+            Outcome::Finished { secs: start.elapsed().as_secs() }
+        } else {
+            Outcome::NeverStarted
+        }
     }
 }
 

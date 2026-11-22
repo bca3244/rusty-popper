@@ -46,6 +46,14 @@ impl App {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(anyhow!("reload thread ended without a result")),
         };
         self.reload = None;
+        // A read that got no button setup (the table was locked or mid-change)
+        // must not leave the cabinet without buttons: keep the one we have.
+        let result = result.map(|mut lib| {
+            if lib.functions.is_empty() {
+                lib.functions.clone_from(&self.lib.functions);
+            }
+            lib
+        });
         match result {
             Ok(lib) if lib != self.lib => self.apply_library(lib),
             Ok(_) => {}
