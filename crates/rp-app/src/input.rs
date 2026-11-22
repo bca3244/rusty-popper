@@ -21,6 +21,10 @@ pub enum Action {
     Menu,
     /// Open the playlist picker.
     Playlists,
+    /// Show / hide the game's info card (Popper's "Game Info/Flyer").
+    Info,
+    /// Show / hide the game's help card (Popper's "Game Help").
+    Help,
     ToggleStyle,
 }
 
@@ -37,6 +41,8 @@ impl Action {
             "Page Prior" => Action::PagePrev,
             "Page Next" => Action::PageNext,
             "List Next" | "List Prior" => Action::Playlists,
+            "Game Info/Flyer" => Action::Info,
+            "Game Help" => Action::Help,
             "Game Start" | "_Game Start Alt" => Action::Start,
             "Menu/System Exit" | "System Menu" | "Exit Emulators" => Action::Menu,
             _ => return None,
@@ -96,6 +102,8 @@ impl Bindings {
             (KeyCode::Escape, Action::Menu),
             (KeyCode::KeyP, Action::Playlists),
             (KeyCode::KeyW, Action::ToggleStyle),
+            (KeyCode::KeyI, Action::Info),
+            (KeyCode::KeyH, Action::Help),
         ]);
         if keyboard_quit {
             keys.push((KeyCode::KeyQ, Action::Quit));

@@ -44,3 +44,10 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 
 [audio]
 # volume = 100         # playfield video volume; default from PinUpPlayer.ini
+
+[sound]
+# Menu sound effects, from Popper's PUPVideos\PinUpMenu\PuPSounds (fx_*.wav).
+# Also in the app: Exit -> Options.
+# enabled = true
+# volume = 70
+# dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'

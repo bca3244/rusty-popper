@@ -21,10 +21,12 @@ mod library;
 mod logging;
 mod menu;
 mod mpv;
+mod overlay;
 mod reload;
 mod render;
 mod session;
 mod settings;
+mod sfx;
 mod video;
 mod wheel;
 mod win;
@@ -241,10 +243,11 @@ fn run() -> Result<()> {
         None => 0,
     };
 
-    let screens: Vec<Screen> = config::read_screens(&popper.join("PinUpPlayer.ini"))?
-        .into_iter()
-        .filter(|s| LIVE.contains(&s.slot) && s.width > 0 && s.height > 0)
-        .collect();
+    let all_screens = config::read_screens(&popper.join("PinUpPlayer.ini"))?;
+    // Where Popper shows the info / help cards (used to pick which of our screens draws them).
+    let card_screen = |slot: Slot| all_screens.iter().find(|s| s.slot == slot && s.width > 0 && s.height > 0).cloned();
+    let card_screens = (card_screen(Slot::GameInfo), card_screen(Slot::GameHelp));
+    let screens: Vec<Screen> = all_screens.into_iter().filter(|s| LIVE.contains(&s.slot) && s.width > 0 && s.height > 0).collect();
     if !screens.iter().any(|s| s.slot == Slot::PlayField) {
         bail!("PinUpPlayer.ini has no PlayField screen");
     }
@@ -275,6 +278,13 @@ fn run() -> Result<()> {
     let mut app = App {
         mpv,
         screens,
+        card_screens,
+        card: None,
+        sounds: sfx::Sounds::load(
+            &settings.sound.dir.clone().unwrap_or_else(|| popper.join("PUPVideos").join("PinUpMenu").join("PuPSounds")),
+            settings.sound.enabled,
+            settings.sound.volume,
+        ),
         lib,
         bindings,
         joy_overrides,
@@ -460,7 +470,7 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 6; // style, attract, idle, interval, volume, back
+const OPTION_ROWS: usize = 8; // style, attract, idle, interval, volume, sounds, sound volume, back
 
 fn next_choice(choices: &[u64], cur: u64) -> u64 {
     let i = choices.iter().position(|&c| c > cur).unwrap_or(0);
@@ -515,6 +525,11 @@ fn power(el: &ActiveEventLoop, flag: &str) {
 struct App {
     mpv: mpv::Mpv,
     screens: Vec<Screen>,
+    /// Popper's GameInfo / GameHelp screen rectangles, if configured.
+    card_screens: (Option<Screen>, Option<Screen>),
+    /// The info / help card being shown.
+    card: Option<overlay::Card>,
+    sounds: sfx::Sounds,
     /// The games and playlists, as last read from Popper's database.
     lib: Library,
     bindings: input::Bindings,

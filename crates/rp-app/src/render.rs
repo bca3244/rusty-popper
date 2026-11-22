@@ -170,6 +170,10 @@ impl App {
             return Ok(()); // a button just launched a game
         }
         self.attract_tick();
+        // The "no card" notice closes by itself.
+        if self.card.as_ref().is_some_and(|c| c.expired()) {
+            self.close_card();
+        }
         let style = self.style;
         let option_labels = self.option_labels();
         let ui_rotation = self.ui_rotation();
@@ -241,12 +245,18 @@ impl App {
         // Pass 2: composite. The slide runs along the player's left/right: on
         // the playfield that's the menu's rotated x axis, elsewhere screen x.
         let pf_rot = (g.outs[0].screen.rotation + ui_rotation).rem_euclid(360);
-        for o in g.outs.iter_mut().skip(1) {
+        for (i, o) in g.outs.iter_mut().enumerate().skip(1) {
             g.context.make_current(&o.surface)?;
-            if let Some(t) = &o.target {
+            let card = self.card.as_ref().filter(|c| c.out == i);
+            if o.target.is_some() || card.is_some() {
                 g.canvas.set_size(o.screen.width as u32, o.screen.height as u32, 1.0);
-                let a = (o.screen.rotation as f32).to_radians();
-                video::composite(&mut g.canvas, t, &mut o.slide, (a.cos(), a.sin()));
+                if let Some(t) = &o.target {
+                    let a = (o.screen.rotation as f32).to_radians();
+                    video::composite(&mut g.canvas, t, &mut o.slide, (a.cos(), a.sin()));
+                }
+                if let Some(card) = card {
+                    overlay::draw(&mut g.canvas, o.screen.width as f32, o.screen.height as f32, card, &g.fonts);
+                }
                 g.canvas.flush();
             }
             o.surface.swap_buffers(&g.context)?;
@@ -290,6 +300,9 @@ impl App {
             };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw, lh, &view, &g.fonts);
+        }
+        if let Some(card) = self.card.as_ref().filter(|c| c.out == 0) {
+            overlay::draw(&mut g.canvas, lw, lh, card, &g.fonts);
         }
         g.canvas.restore();
         g.canvas.flush();

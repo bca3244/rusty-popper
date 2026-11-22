@@ -31,6 +31,11 @@
 //! enabled = true
 //! idle_secs = 180
 //! interval_secs = 12
+//!
+//! [sound]
+//! enabled = true    # menu sound effects (Popper's PinUpMenu sounds)
+//! volume = 70
+//! # dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'
 //! ```
 
 use serde::Deserialize;
@@ -127,6 +132,27 @@ pub struct PathSettings {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SoundSettings {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// 0-100.
+    #[serde(default = "default_sound_volume")]
+    pub volume: i32,
+    /// Folder with fx_*.wav. Default: Popper's PUPVideos\PinUpMenu\PuPSounds.
+    pub dir: Option<std::path::PathBuf>,
+}
+
+fn default_sound_volume() -> i32 {
+    70
+}
+
+impl Default for SoundSettings {
+    fn default() -> Self {
+        SoundSettings { enabled: true, volume: default_sound_volume(), dir: None }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AttractSettings {
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -170,6 +196,8 @@ pub struct Settings {
     pub launch: LaunchSettings,
     #[serde(default)]
     pub paths: PathSettings,
+    #[serde(default)]
+    pub sound: SoundSettings,
 }
 
 impl Settings {
@@ -205,6 +233,8 @@ pub struct Editable {
     pub attract_idle_secs: u64,
     pub attract_interval_secs: u64,
     pub volume: i32,
+    pub sound_enabled: bool,
+    pub sound_volume: i32,
 }
 
 /// `text` (the current file contents) with the editable values set, keeping
@@ -223,6 +253,8 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("attract", "idle_secs", (v.attract_idle_secs as i64).into());
     set("attract", "interval_secs", (v.attract_interval_secs as i64).into());
     set("audio", "volume", (v.volume as i64).into());
+    set("sound", "enabled", v.sound_enabled.into());
+    set("sound", "volume", (v.sound_volume as i64).into());
     Ok(doc.to_string())
 }
 
@@ -273,7 +305,7 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40 };
+        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30 };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
