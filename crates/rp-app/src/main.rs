@@ -98,13 +98,16 @@ fn find_mpv_dll(explicit: Option<PathBuf>) -> Result<PathBuf> {
     candidates.into_iter().find(|p| p.is_file()).ok_or_else(|| anyhow!("libmpv-2.dll not found; pass --mpv"))
 }
 
-/// A game on the wheel with its resolved media.
+/// A wheel entry with its resolved media: a game, or (when `playlist` is set)
+/// a playlist shown as a wheel, whose media lives in POPMedia\Default.
 struct Item {
     game: Game,
     emu: Emulator,
     emu_name: String,
     media_dir: PathBuf,
     wheel_png: Option<PathBuf>,
+    /// For playlist entries: 0 = all games, n = playlists[n - 1].
+    playlist: Option<usize>,
 }
 
 impl Item {
@@ -121,6 +124,9 @@ impl Item {
             (None, None) => String::new(),
         };
         // Popper's tags (VR, nFozzy, Fleep...), then the emulator.
+        if self.playlist.is_some() {
+            return wheel::Entry { title: g.display.clone(), subtitle: String::new(), chips: vec!["Playlist".into()], logo: None };
+        }
         let mut chips: Vec<String> = g.tags.clone();
         chips.push(self.emu_name.clone());
         wheel::Entry { title: g.display.clone(), subtitle, chips, logo: None }
@@ -134,7 +140,7 @@ fn load_items(popper: &std::path::Path, emus: &[Emulator], games: Vec<Game>) -> 
             let emu = emus.iter().find(|e| e.id == game.emu_id)?; // hidden emulators drop out
             let media_dir = emu.media_dir.clone().unwrap_or_else(|| popper.join("POPMedia").join(&emu.name));
             let wheel_png = config::find_wheel(&media_dir, &game.name);
-            Some(Item { emu_name: emu.name.clone(), emu: emu.clone(), media_dir, wheel_png, game })
+            Some(Item { emu_name: emu.name.clone(), emu: emu.clone(), media_dir, wheel_png, game, playlist: None })
         })
         .collect()
 }
@@ -146,7 +152,7 @@ fn main() -> Result<()> {
 
     let db = db::PopperDb::open_copy(&args.popper.join("PUPDatabase.db"))?;
     let emus = db.emulators()?;
-    let items = load_items(&args.popper, &emus, db.games()?);
+    let mut items = load_items(&args.popper, &emus, db.games()?);
     let mut joy_overrides: Vec<(u32, input::Action)> = Vec::new();
     let inp = &settings.input;
     for (buttons, action) in [
@@ -218,6 +224,31 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Playlists ride on the wheel too, after the games: "All games" (Popper's
+    // go-back wheel) and each playlist with its Popper wheel and videos.
+    let game_count = items.len();
+    let default_media = args.popper.join("POPMedia").join("Default");
+    let template = items[0].emu.clone();
+    for n in 0..=playlists.len() {
+        let (name, logo) = match n {
+            0 => ("All games".to_string(), Some("goback".to_string())),
+            n => (playlists[n - 1].name.clone(), playlists[n - 1].logo.clone()),
+        };
+        let logo = logo.unwrap_or_default();
+        let mut game = items[0].game.clone();
+        game.id = -1 - n as i64;
+        game.name = logo.clone();
+        game.display = name;
+        game.tags.clear();
+        items.push(Item {
+            wheel_png: config::find_wheel(&default_media, &logo),
+            media_dir: default_media.clone(),
+            emu_name: String::new(),
+            emu: template.clone(),
+            game,
+            playlist: Some(n),
+        });
+    }
     let volume = settings.audio.volume.unwrap_or_else(|| screens.iter().find(|s| s.slot == Slot::PlayField).map_or(100, |s| s.volume)).clamp(0, 100);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -225,6 +256,7 @@ fn main() -> Result<()> {
         mpv,
         screens,
         items,
+        game_count,
         bindings,
         style,
         start,
@@ -298,7 +330,7 @@ struct Gfx {
 
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
-const EXIT_MENU: &[&str] = &["Back to games", "Change playlist", "Options", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
+const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
 
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
@@ -324,7 +356,6 @@ struct Playing {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuKind {
     Exit,
-    Playlists,
     Options,
 }
 
@@ -364,6 +395,8 @@ struct App {
     /// Read-only copy of Popper's DB, kept for running playlist queries.
     db: db::PopperDb,
     playlists: Vec<db::Playlist>,
+    /// items[..game_count] are games; the rest are playlist entries.
+    game_count: usize,
     /// 0 = all games, n = playlists[n - 1].
     playlist: usize,
     /// Item indices in the current playlist, in wheel order.
@@ -410,9 +443,10 @@ impl App {
         let saved = self.playlists.iter().position(|p| p.name == last.trim()).map(|i| i + 1).unwrap_or(0);
         self.playlist = saved;
         self.view = self.playlist_view(saved);
-        if self.view.is_empty() || (self.start != 0 && !self.view.contains(&self.start)) {
+        let has_games = self.view.first().is_some_and(|&i| i < self.game_count);
+        if !has_games || (self.start != 0 && !self.view.contains(&self.start)) {
             self.playlist = 0;
-            self.view = (0..self.items.len()).collect();
+            self.view = self.playlist_view(0);
         }
         let start_pos = self.view.iter().position(|&i| i == self.start).unwrap_or(0);
         self.start = self.view[start_pos];
@@ -529,18 +563,24 @@ impl App {
     }
 
     /// Item indices for playlist `n` (0 = all games), in wheel order.
+    /// The playlist's games, then the other playlists as wheel entries, so
+    /// they sit where the wheel wraps from the last game back to the first.
     fn playlist_view(&self, n: usize) -> Vec<usize> {
-        if n == 0 || n > self.playlists.len() {
-            return (0..self.items.len()).collect();
-        }
-        let pl = &self.playlists[n - 1];
-        match self.db.playlist_games(pl) {
-            Ok(ids) => ids.iter().filter_map(|id| self.items.iter().position(|it| it.game.id == *id)).collect(),
-            Err(e) => {
-                eprintln!("Playlist {:?}: {e:#}", pl.name);
-                Vec::new()
+        let n = if n > self.playlists.len() { 0 } else { n };
+        let mut view: Vec<usize> = if n == 0 {
+            (0..self.game_count).collect()
+        } else {
+            let pl = &self.playlists[n - 1];
+            match self.db.playlist_games(pl) {
+                Ok(ids) => ids.iter().filter_map(|id| self.items[..self.game_count].iter().position(|it| it.game.id == *id)).collect(),
+                Err(e) => {
+                    eprintln!("Playlist {:?}: {e:#}", pl.name);
+                    Vec::new()
+                }
             }
-        }
+        };
+        view.extend((self.game_count..self.items.len()).filter(|&i| self.items[i].playlist != Some(n)));
+        view
     }
 
     fn playlist_name(&self) -> &str {
@@ -582,7 +622,11 @@ impl App {
         if n == 0 {
             return;
         }
-        let letter = |pos: usize| letter_of(&self.items[self.view[pos % n]].game.display);
+        // Playlist entries form one group (shown as a star) after the games.
+        let letter = |pos: usize| {
+            let it = &self.items[self.view[pos % n]];
+            if it.playlist.is_some() { '*' } else { letter_of(&it.game.display) }
+        };
         let cur = g.wheel.selected();
         let here = letter(cur);
         let mut pos = cur;
@@ -676,17 +720,13 @@ impl App {
             let n = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.len(),
                 MenuKind::Options => OPTION_ROWS,
-                MenuKind::Playlists => self.playlists.len() + 1,
             };
             match action {
                 Prev | PagePrev | LetterPrev => menu.selected = (menu.selected + n - 1) % n,
                 Next | PageNext | LetterNext => menu.selected = (menu.selected + 1) % n,
                 Menu => self.menu = None,
-                Playlists => {
-                    if menu.kind == MenuKind::Playlists {
-                        self.menu = None;
-                    }
-                }
+                Playlists => {}
+
                 Quit => el.exit(),
                 Start => {
                     let (kind, choice) = (menu.kind, menu.selected);
@@ -698,15 +738,11 @@ impl App {
                     self.menu = None;
                     match (kind, choice) {
                         (MenuKind::Exit, 1) => {
-                            self.menu = Some(ExitMenu { kind: MenuKind::Playlists, selected: self.playlist, opened: Instant::now() });
-                        }
-                        (MenuKind::Exit, 2) => {
                             self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: 0, opened: Instant::now() });
                         }
-                        (MenuKind::Exit, 3) => el.exit(),
-                        (MenuKind::Exit, 4) => power(el, "/r"),
-                        (MenuKind::Exit, 5) => power(el, "/s"),
-                        (MenuKind::Playlists, n) => self.set_playlist(n),
+                        (MenuKind::Exit, 2) => el.exit(),
+                        (MenuKind::Exit, 3) => power(el, "/r"),
+                        (MenuKind::Exit, 4) => power(el, "/s"),
                         _ => {}
                     }
                 }
@@ -717,7 +753,13 @@ impl App {
         let g = self.gfx.as_mut().unwrap();
         match action {
             Menu => self.menu = Some(ExitMenu { kind: MenuKind::Exit, selected: 0, opened: Instant::now() }),
-            Playlists => self.menu = Some(ExitMenu { kind: MenuKind::Playlists, selected: self.playlist, opened: Instant::now() }),
+            // Jump to the playlist wheels (after the games).
+            Playlists => {
+                let cur = g.wheel.selected();
+                if let Some(pos) = self.view.iter().position(|&i| i >= self.game_count) {
+                    g.wheel.step(pos as i64 - cur as i64);
+                }
+            }
             Prev => g.wheel.step(-1),
             Next => g.wheel.step(1),
             // Popper's Page Prior/Next (usually the magna-saves) jump by letter.
@@ -726,7 +768,10 @@ impl App {
             ToggleStyle => self.style = self.style.toggled(),
             Start => {
                 if let Some(&item) = self.view.get(g.wheel.selected()) {
-                    self.launch(item);
+                    match self.items[item].playlist {
+                        Some(n) => self.set_playlist(n),
+                        None => self.launch(item),
+                    }
                 }
             }
             Quit => el.exit(),
@@ -760,9 +805,14 @@ impl App {
         let n = self.view.len() as i64;
         let Some(g) = self.gfx.as_mut() else { return };
         let cur = g.wheel.selected() as i64;
-        let mut target = (self.rng % n as u64) as i64;
+        // Only games (they come first in the view), never the playlist wheels.
+        let games = self.view.iter().take_while(|&&i| i < self.game_count).count() as i64;
+        if games < 2 {
+            return;
+        }
+        let mut target = (self.rng % games as u64) as i64;
         if target == cur {
-            target = (target + 1) % n;
+            target = (target + 1) % games;
         }
         let mut d = target - cur;
         if d > n / 2 {
@@ -914,12 +964,10 @@ impl App {
         if let Some(menu) = &self.menu {
             let names: Vec<&str> = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.to_vec(),
-                MenuKind::Playlists => std::iter::once("All games").chain(self.playlists.iter().map(|p| p.name.as_str())).collect(),
                 MenuKind::Options => option_labels.iter().map(String::as_str).collect(),
             };
             let title = match menu.kind {
                 MenuKind::Exit => "Exit",
-                MenuKind::Playlists => "Playlists",
                 MenuKind::Options => "Options",
             };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
