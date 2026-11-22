@@ -375,6 +375,19 @@ fn reflection(cv: &mut Cv, img: ImageId, x: f32, top: f32, w: f32, h: f32, alpha
     cv.restore();
 }
 
+/// A stable hue for a tag name, picked from a palette of clearly different
+/// colours by a case-insensitive FNV-1a hash, so each tag keeps its colour.
+fn tag_hue(tag: &str) -> f32 {
+    const HUES: [f32; 12] = [0.0, 22.0, 42.0, 95.0, 135.0, 165.0, 188.0, 208.0, 232.0, 262.0, 290.0, 330.0];
+    let mut h: u32 = 0x811c_9dc5;
+    for b in tag.to_ascii_lowercase().bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h ^= h >> 16;
+    HUES[(h % HUES.len() as u32) as usize]
+}
+
 /// Splits "Name (Maker Year)" into the name and its parenthesised suffix.
 fn split_suffix(t: &str) -> (String, Option<String>) {
     let t = t.trim();
@@ -453,20 +466,26 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     let left = x + off * 2.0;
     let mut chip_x = left;
     for chip in &e.chips {
-        let paint = text(f.fonts.body, 24.0, Color::rgbaf(0.875, 0.894, 0.933, a), Align::Left);
+        let paint = text(f.fonts.body, 24.0, Color::rgbaf(1.0, 1.0, 1.0, a), Align::Left);
         let tw = cv.measure_text(0.0, 0.0, chip, &paint).map(|m| m.width()).unwrap_or(100.0);
         let w = tw + 32.0;
         if chip_x > left && chip_x + w > x + max_w {
             chip_x = left;
             chip_top += 54.0;
         }
+        // A solid colour per tag (the same tag always gets the same colour)
+        // so the text stays readable over busy playfield video.
+        let hue = tag_hue(chip);
         let mut p = Path::new();
         p.rounded_rect(chip_x, chip_top, w, 42.0, 21.0);
-        cv.fill_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.08 * a)));
-        cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.18 * a)).with_line_width(1.5));
+        cv.fill_path(&p, &Paint::color(hue_color(hue, 0.65, 0.34, 0.92 * a)));
+        cv.stroke_path(&p, &Paint::color(hue_color(hue, 0.8, 0.62, 0.9 * a)).with_line_width(1.5));
+        let shadow = text(f.fonts.body, 24.0, Color::rgbaf(0.0, 0.0, 0.0, 0.5 * a), Align::Left);
+        let _ = cv.fill_text(chip_x + 17.0, chip_top + 30.5, chip, &shadow);
         let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
         chip_x += w + 12.0;
-    }    let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
+    }
+    let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
     let counter = format!("{:02} / {}", idx + 1, f.order.len());
     let _ = cv.fill_text(vw - 96.0, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
 }
