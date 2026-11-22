@@ -9,4 +9,5 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 rp-db.workspace = true
+log = "0.4"
 sysinfo = "0.40.4"
