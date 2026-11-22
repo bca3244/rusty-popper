@@ -46,6 +46,8 @@ const RENDER_PARAM_OPENGL_FBO: c_int = 3;
 const RENDER_PARAM_FLIP_Y: c_int = 4;
 
 pub const EVENT_SHUTDOWN: i32 = 1;
+/// Playback (re)started after loading or seeking: the new file has frames.
+pub const EVENT_PLAYBACK_RESTART: i32 = 21;
 
 struct Api {
     _lib: Library,
@@ -162,10 +164,16 @@ impl Player {
     /// Draws the current video frame into framebuffer 0. The GL context for
     /// this screen must be current.
     pub fn render(&self, w: i32, h: i32) {
+        self.render_to(0, w, h);
+    }
+
+    /// Draws the current video frame into framebuffer object `fbo`, top row first
+    /// (so a texture attached to it reads the right way up).
+    pub fn render_to(&self, fbo: i32, w: i32, h: i32) {
         if self.render.is_null() {
             return;
         }
-        let mut fbo = OpenGlFbo { fbo: 0, w, h, internal_format: 0 };
+        let mut fbo = OpenGlFbo { fbo, w, h, internal_format: 0 };
         let mut flip: c_int = 1;
         let mut params = [
             RenderParam { kind: RENDER_PARAM_OPENGL_FBO, data: &mut fbo as *mut _ as *mut c_void },
