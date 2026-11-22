@@ -183,7 +183,7 @@ fn now_secs() -> u64 {
 fn wait_for_game(emu_dir: &Path, since: u64, phase: &AtomicU8) -> Outcome {
     let Ok(mut sys) = System::new() else { return Outcome::NeverStarted };
     let emu_dir = emu_dir.to_string_lossy().to_lowercase();
-    let mut running = |sys: &mut System| -> Vec<String> {
+    let running = |sys: &mut System| -> Vec<String> {
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet));
         sys.processes()
             .values()

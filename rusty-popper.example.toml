@@ -12,3 +12,11 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # Extra joystick buttons (1-based, as Popper numbers them) that open the
 # exit menu, in addition to Popper's System Menu / Exit bindings.
 # menu_joy_buttons = [10]
+# letter_prev_joy_buttons = [2]   # jump to the previous starting letter
+# letter_next_joy_buttons = [4]   # jump to the next starting letter
+# playlist_joy_buttons = []       # open the playlist picker (also in the exit menu, or P)
+
+[attract]
+# enabled = true
+# idle_secs = 180      # idle time before attract mode starts
+# interval_secs = 12   # time on each game in attract mode

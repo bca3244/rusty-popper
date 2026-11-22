@@ -9,6 +9,14 @@
 //!
 //! [input]
 //! menu_joy_buttons = [10]   # extra buttons that open the exit menu
+//! letter_prev_joy_buttons = [2]
+//! letter_next_joy_buttons = [4]
+//! playlist_joy_buttons = []
+//!
+//! [attract]
+//! enabled = true
+//! idle_secs = 180
+//! interval_secs = 12
 //! ```
 
 use serde::Deserialize;
@@ -58,6 +66,42 @@ pub struct InputSettings {
     /// Popper's System Menu / Exit bindings.
     #[serde(default)]
     pub menu_joy_buttons: Vec<u32>,
+    /// Buttons that jump to the previous / next starting letter.
+    #[serde(default)]
+    pub letter_prev_joy_buttons: Vec<u32>,
+    #[serde(default)]
+    pub letter_next_joy_buttons: Vec<u32>,
+    /// Buttons that open the playlist picker.
+    #[serde(default)]
+    pub playlist_joy_buttons: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AttractSettings {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Seconds without input before attract mode starts.
+    #[serde(default = "default_idle")]
+    pub idle_secs: u64,
+    /// Seconds between games while in attract mode.
+    #[serde(default = "default_interval")]
+    pub interval_secs: u64,
+}
+
+fn yes() -> bool {
+    true
+}
+fn default_idle() -> u64 {
+    180
+}
+fn default_interval() -> u64 {
+    12
+}
+
+impl Default for AttractSettings {
+    fn default() -> Self {
+        AttractSettings { enabled: true, idle_secs: default_idle(), interval_secs: default_interval() }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -68,6 +112,8 @@ pub struct Settings {
     pub playfield: PlayfieldSettings,
     #[serde(default)]
     pub input: InputSettings,
+    #[serde(default)]
+    pub attract: AttractSettings,
 }
 
 impl Settings {

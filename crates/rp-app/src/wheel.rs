@@ -93,10 +93,23 @@ impl Wheel {
 pub struct Frame<'a> {
     pub style: WheelStyle,
     pub wheel: &'a Wheel,
+    /// Every game's entry; `order` picks and orders the ones in the current playlist.
     pub entries: &'a [Entry],
+    pub order: &'a [usize],
+    /// Current playlist name, shown above the counter.
+    pub playlist: &'a str,
     pub fonts: &'a Fonts,
     /// 0 = black, 1 = video fully visible (fade after a media swap).
     pub video_fade: f32,
+    /// Letter jump indicator: the letter and seconds since the jump.
+    pub letter: Option<(char, f32)>,
+}
+
+impl Frame<'_> {
+    /// Entry at wheel position `pos` (index into the playlist).
+    fn entry(&self, pos: usize) -> &Entry {
+        &self.entries[self.order[pos]]
+    }
 }
 
 type Cv = Canvas<OpenGl>;
@@ -122,14 +135,45 @@ pub fn draw(cv: &mut Cv, w: f32, h: f32, f: &Frame) {
     p.rect(0.0, dh - 430.0, vw, 430.0);
     cv.fill_path(&p, &Paint::linear_gradient(0.0, dh - 430.0, 0.0, dh, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, 0.6)));
 
-    if !f.entries.is_empty() {
+    if !f.order.is_empty() {
         match f.style {
             WheelStyle::Arc => draw_arc(cv, vw, dh, f),
             WheelStyle::Flow => draw_flow(cv, vw, dh, f),
         }
         draw_info(cv, vw, f);
+    } else {
+        let paint = Paint::color(Color::rgbaf(0.9, 0.92, 0.96, 0.8))
+            .with_font(&[f.fonts.display])
+            .with_font_size(56.0)
+            .with_text_align(Align::Center)
+            .with_text_baseline(Baseline::Middle);
+        let _ = cv.fill_text(vw / 2.0, dh / 2.0, format!("{} is empty", f.playlist), &paint);
+    }
+    if let Some((letter, t)) = f.letter {
+        draw_letter(cv, vw, dh, letter, t, f.fonts);
     }
     cv.restore();
+}
+
+/// Big letter that pops up and fades after a jump-by-letter.
+fn draw_letter(cv: &mut Cv, vw: f32, dh: f32, letter: char, t: f32, fonts: &Fonts) {
+    const SHOW: f32 = 0.9;
+    if t > SHOW {
+        return;
+    }
+    let a = (1.0 - t / SHOW).powf(0.6);
+    let sc = 0.85 + 0.15 * ease_out(t / 0.15);
+    let (cx, cy) = (vw / 2.0, dh * 0.45);
+    let mut p = Path::new();
+    p.rounded_rect(cx - 150.0 * sc, cy - 150.0 * sc, 300.0 * sc, 300.0 * sc, 48.0);
+    cv.fill_path(&p, &Paint::color(Color::rgbaf(0.03, 0.04, 0.07, 0.75 * a)));
+    cv.stroke_path(&p, &Paint::color(Color::rgbaf(0.325, 0.827, 1.0, 0.8 * a)).with_line_width(4.0));
+    let paint = Paint::color(Color::rgbaf(0.96, 0.97, 0.99, a))
+        .with_font(&[fonts.display])
+        .with_font_size(220.0 * sc)
+        .with_text_align(Align::Center)
+        .with_text_baseline(Baseline::Middle);
+    let _ = cv.fill_text(cx, cy + 8.0, letter.to_string(), &paint);
 }
 
 fn fill_rect(cv: &mut Cv, x: f32, y: f32, w: f32, h: f32, c: Color) {
@@ -223,7 +267,7 @@ fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
     let (step, base_w, base_h) = if narrow { (0.145f32, 180.0f32, 150.0f32) } else { (0.205, 240.0, 190.0) };
     let (r, cx, sy) = (1500.0f32, vw / 2.0, dh - 240.0);
     let cy = sy + r;
-    let sel = &f.entries[f.wheel.selected()];
+    let sel = f.entry(f.wheel.selected());
 
     for (rad, a0, alpha, lw) in [(r, 0.95f32, 0.10f32, 3.0f32), (r + 190.0, 0.8, 0.05, 2.0)] {
         let mut p = Path::new();
@@ -234,8 +278,8 @@ fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
     let near = 1.0 - clamp((pos - pos.round()).abs() * 2.0, 0.0, 1.0);
     slot_glow(cv, cx, sy, 360.0, 200.0, entry_hue(sel), 0.6 + 0.4 * near);
 
-    for (i, d) in visible_items(pos, f.entries.len(), 4.6) {
-        let e = &f.entries[i];
+    for (i, d) in visible_items(pos, f.order.len(), 4.6) {
+        let e = f.entry(i);
         let ang = d * step;
         let ad = d.abs();
         let (x, y) = (cx + r * ang.sin(), cy - r * ang.cos());
@@ -254,15 +298,15 @@ fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
 fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
     let (cx, y0, focal) = (vw / 2.0, dh - 320.0, 1600.0f32);
     const STRIPS: usize = 22;
-    let sel = &f.entries[f.wheel.selected()];
+    let sel = f.entry(f.wheel.selected());
     fill_rect(cv, 0.0, y0 + 182.0, vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
     slot_glow(cv, cx, y0, 420.0, 230.0, entry_hue(sel), 0.9);
 
     // Portrait shows three covers each side, landscape five.
     // The outermost cover fades in/out as the shelf moves instead of popping.
     let shown = if vw < DESIGN_W * 0.75 { 3.0 } else { 5.0 };
-    for (i, d) in visible_items(f.wheel.pos, f.entries.len(), shown + 1.0) {
-        let e = &f.entries[i];
+    for (i, d) in visible_items(f.wheel.pos, f.order.len(), shown + 1.0) {
+        let e = f.entry(i);
         let a = d.abs();
         let sgn = d.signum();
         let a1 = a.min(1.0);
@@ -349,7 +393,7 @@ fn split_title(t: &str) -> (String, String) {
 
 fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     let idx = f.wheel.selected();
-    let e = &f.entries[idx];
+    let e = f.entry(idx);
     let hue = entry_hue(e);
     let a = ease_out(f.wheel.info_t / INFO_FADE);
     let off = (1.0 - a) * 28.0;
@@ -399,7 +443,8 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
         let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
         chip_x += w + 12.0;
     }
-    let counter = format!("{:02} / {}", idx + 1, f.entries.len());
+    let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
+    let counter = format!("{:02} / {}", idx + 1, f.order.len());
     let _ = cv.fill_text(vw - 96.0, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
 }
 
