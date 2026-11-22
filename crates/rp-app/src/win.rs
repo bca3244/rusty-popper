@@ -29,14 +29,24 @@ fn covers(r: &RECT, (x, y, w, h): (i32, i32, i32, i32)) -> bool {
 
 /// Who has the foreground; `screens` are our screens as `(x, y, width, height)`.
 pub fn foreground(screens: &[(i32, i32, i32, i32)]) -> Foreground {
+    foreground_of(screens).0
+}
+
+/// Who has the foreground, and the process id that window belongs to (0 for none).
+pub fn foreground_of(screens: &[(i32, i32, i32, i32)]) -> (Foreground, u32) {
+    let mut pid = 0u32;
+    let who = unsafe { classify(screens, &mut pid) };
+    (who, pid)
+}
+
+unsafe fn classify(screens: &[(i32, i32, i32, i32)], pid: &mut u32) -> Foreground {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_null() {
             return Foreground::Shell;
         }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, &mut pid);
-        if pid == GetCurrentProcessId() {
+        GetWindowThreadProcessId(fg, pid);
+        if *pid == GetCurrentProcessId() {
             return Foreground::Ours;
         }
         let mut buf = [0u16; 64];

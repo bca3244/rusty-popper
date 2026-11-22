@@ -12,6 +12,7 @@ use rp_db::{Emulator, Game};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -83,6 +84,8 @@ pub enum Phase {
 pub struct Control {
     phase: AtomicU8,
     stop: AtomicBool,
+    /// Process ids of the game, as last seen.
+    pids: Mutex<Vec<u32>>,
 }
 
 impl Control {
@@ -96,6 +99,17 @@ impl Control {
 
     fn set(&self, phase: Phase) {
         self.phase.store(phase as u8, Ordering::Relaxed);
+    }
+
+    /// The game's process ids as last seen (empty when it can't be tracked).
+    pub fn game_pids(&self) -> Vec<u32> {
+        self.pids.lock().map(|p| p.clone()).unwrap_or_default()
+    }
+
+    fn set_pids(&self, known: &[Pid]) {
+        if let Ok(mut p) = self.pids.lock() {
+            *p = known.iter().map(|pid| pid.as_u32()).collect();
+        }
     }
 
     /// Asks the worker to close the game (the cabinet's Exit button).
@@ -503,6 +517,7 @@ impl LaunchJob {
             let procs = tracker.scan();
             if !procs.is_empty() {
                 log::info!("Game process: {}", procs.join(", "));
+                ctl.set_pids(&tracker.known);
                 break;
             }
             if ctl.stop_requested() {
@@ -551,7 +566,9 @@ impl LaunchJob {
                 true
             } else {
                 last_full = Instant::now();
-                !tracker.scan().is_empty()
+                let found = !tracker.scan().is_empty();
+                ctl.set_pids(&tracker.known);
+                found
             };
             if alive {
                 gone_since = None;
@@ -713,5 +730,8 @@ mod tests {
         assert!(!c.stop_requested());
         c.request_stop();
         assert!(c.stop_requested());
+        assert!(c.game_pids().is_empty());
+        c.set_pids(&[Pid::from_u32(42)]);
+        assert_eq!(c.game_pids(), [42]);
     }
 }

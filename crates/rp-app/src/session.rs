@@ -32,11 +32,16 @@ impl App {
         }
         let mut phase = p.ctl.phase();
         // The emulator's process shows up long before the table does. Until
-        // its window covers one of our screens, this is still "Launching".
+        // a window of the game covers one of our screens, this is still
+        // "Launching". (Other programs' windows don't count: VPin Studio's
+        // overlay, say, takes the focus for a moment at every launch.)
         if phase == Phase::Playing && !p.game_up {
             let seen = *p.process_since.get_or_insert_with(Instant::now);
             let rects: Vec<(i32, i32, i32, i32)> = self.screens.iter().map(|s| (s.x, s.y, s.width, s.height)).collect();
-            if win::foreground(&rects) == win::Foreground::Other || seen.elapsed() >= GAME_UP_TIMEOUT {
+            let (fg, pid) = win::foreground_of(&rects);
+            let pids = p.ctl.game_pids();
+            let game_window = fg == win::Foreground::Other && (pids.is_empty() || pids.contains(&pid));
+            if game_window || seen.elapsed() >= GAME_UP_TIMEOUT {
                 log::info!("Game on screen after {:.1}s", p.since.elapsed().as_secs_f32());
                 p.game_up = true;
             } else {
