@@ -10,6 +10,7 @@ use rp_db::{Emulator, Game};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -28,6 +29,28 @@ pub struct LaunchJob {
     pub popper_dir: PathBuf,
     pub emulator: Emulator,
     pub game: Game,
+}
+
+/// Where a running launch is, for the UI (stored in an [AtomicU8]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Phase {
+    /// Launch script running / waiting for the game window.
+    Launching = 0,
+    /// The game process is running.
+    Playing = 1,
+    /// The game exited; post script running.
+    Exiting = 2,
+}
+
+impl Phase {
+    pub fn load(a: &AtomicU8) -> Phase {
+        match a.load(Ordering::Relaxed) {
+            1 => Phase::Playing,
+            2 => Phase::Exiting,
+            _ => Phase::Launching,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,18 +155,20 @@ impl LaunchJob {
 
     /// Runs the whole game: launch script, wait for the game to exit, post
     /// script. Blocks; call it from a worker thread.
-    pub fn run(&self) -> Result<Outcome> {
+    pub fn run(&self, phase: &AtomicU8) -> Result<Outcome> {
+        phase.store(Phase::Launching as u8, Ordering::Relaxed);
         let launched_at = now_secs().saturating_sub(2);
         println!("Launching {} ({})", self.game.display, self.emulator.name);
         self.run_script("launch", &self.emulator.launch_script)?;
 
         let outcome = match &self.emulator.launch_dir {
-            Some(dir) => wait_for_game(dir, launched_at),
+            Some(dir) => wait_for_game(dir, launched_at, phase),
             None => {
                 eprintln!("{} has no emulator folder; can't track the game process", self.emulator.name);
                 Outcome::NeverStarted
             }
         };
+        phase.store(Phase::Exiting as u8, Ordering::Relaxed);
         println!("Game {:?}; running post script", outcome);
         self.run_script("post", &self.emulator.post_script)?;
         Ok(outcome)
@@ -156,7 +181,7 @@ fn now_secs() -> u64 {
 
 /// Waits until a process started from inside `emu_dir` after `since` appears,
 /// then until all such processes have exited.
-fn wait_for_game(emu_dir: &Path, since: u64) -> Outcome {
+fn wait_for_game(emu_dir: &Path, since: u64, phase: &AtomicU8) -> Outcome {
     let Ok(mut sys) = System::new() else { return Outcome::NeverStarted };
     let emu_dir = emu_dir.to_string_lossy().to_lowercase();
     let mut running = |sys: &mut System| -> Vec<String> {
@@ -177,6 +202,7 @@ fn wait_for_game(emu_dir: &Path, since: u64) -> Outcome {
         let procs = running(&mut sys);
         if !procs.is_empty() {
             println!("Game process: {}", procs.join(", "));
+            phase.store(Phase::Playing as u8, Ordering::Relaxed);
             break;
         }
         if start.elapsed() > APPEAR_TIMEOUT {

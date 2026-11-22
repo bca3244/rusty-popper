@@ -276,6 +276,9 @@ struct Playing {
     rx: Receiver<Result<rp_launch::Outcome>>,
     index: usize,
     since: Instant,
+    phase: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// When the game was seen to exit (restarts the screen's animation).
+    exiting_since: Option<Instant>,
 }
 
 struct ExitMenu {
@@ -482,8 +485,8 @@ impl App {
     fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
         // While a game runs, keep our windows up behind it (black, with a
         // "Launching" screen on the playfield) so the desktop never shows.
-        let mut launching: Option<(usize, f32)> = None;
-        if let Some(p) = &self.playing {
+        let mut launching: Option<(usize, rp_launch::Phase, f32)> = None;
+        if let Some(p) = self.playing.as_mut() {
             match p.rx.try_recv() {
                 Ok(result) => {
                     match result {
@@ -500,16 +503,25 @@ impl App {
                     el.set_control_flow(ControlFlow::Poll);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    let t = p.since.elapsed().as_secs_f32();
-                    // Animate while the table loads, then barely tick behind the game.
-                    let every = if t < 15.0 { 33 } else { 1000 };
+                    use rp_launch::Phase;
+                    let phase = Phase::load(&p.phase);
+                    if phase == Phase::Exiting && p.exiting_since.is_none() {
+                        p.exiting_since = Some(Instant::now());
+                    }
+                    let t = p.exiting_since.unwrap_or(p.since).elapsed().as_secs_f32();
+                    // Animate while the table loads or closes; barely tick behind the game.
+                    let every = match phase {
+                        Phase::Playing => 1000,
+                        Phase::Launching if t > 15.0 => 1000,
+                        _ => 33,
+                    };
                     el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(every)));
-                    launching = Some((p.index, t));
+                    launching = Some((p.index, phase, t));
                 }
             }
         }
-        if let Some((index, t)) = launching {
-            return self.render_launching(index, t);
+        if let Some((index, phase, t)) = launching {
+            return self.render_launching(index, phase, t);
         }
         let mut actions = Vec::new();
         {
@@ -614,13 +626,15 @@ impl App {
             }
         }
         let (tx, rx) = std::sync::mpsc::channel();
+        let phase = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let worker_phase = phase.clone();
         std::thread::Builder::new()
             .name("game".into())
             .spawn(move || {
-                let _ = tx.send(job.run());
+                let _ = tx.send(job.run(&worker_phase));
             })
             .expect("spawn game thread");
-        self.playing = Some(Playing { rx, index, since: Instant::now() });
+        self.playing = Some(Playing { rx, index, since: Instant::now(), phase, exiting_since: None });
     }
 
     /// Brings the menu back after a game: screens, video and focus.
@@ -639,7 +653,7 @@ impl App {
 
     /// One frame while a game is running: black screens except the ones the
     /// emulator keeps, and the launch screen on the playfield.
-    fn render_launching(&mut self, index: usize, t: f32) -> Result<()> {
+    fn render_launching(&mut self, index: usize, phase: rp_launch::Phase, t: f32) -> Result<()> {
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
         let keep = &self.items[index].emu.keep_displays;
         for o in &g.outs {
@@ -666,7 +680,8 @@ impl App {
             g.canvas.rotate((rot as f32).to_radians());
             g.canvas.translate(-(lw as f32) / 2.0, -(lh as f32) / 2.0);
         }
-        wheel::draw_launch(&mut g.canvas, lw as f32, lh as f32, &g.entries[index], &self.items[index].emu_name, t, &g.fonts);
+        let verb = if phase == rp_launch::Phase::Exiting { "Exiting" } else { "Launching" };
+        wheel::draw_launch(&mut g.canvas, lw as f32, lh as f32, &g.entries[index], verb, &self.items[index].emu_name, t, &g.fonts);
         g.canvas.restore();
         g.canvas.flush();
         pf.surface.swap_buffers(&g.context)?;

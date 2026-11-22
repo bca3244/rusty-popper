@@ -456,9 +456,9 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
     cv.restore();
 }
 
-/// "Launching <game>" screen shown on the playfield while the emulator starts
+/// "Launching <game>" / "Exiting <game>" screen shown on the playfield while the emulator starts or closes
 /// (and left behind the game window, so the desktop never shows).
-pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, emulator: &str, t: f32, fonts: &Fonts) {
+pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, verb: &str, emulator: &str, t: f32, fonts: &Fonts) {
     let s = (h / DESIGN_H).min(w / DESIGN_H);
     let (vw, dh) = (w / s, h / s);
     cv.save();
@@ -488,7 +488,7 @@ pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, emulator: &str, t: f3
     let text = |font: FontId, size: f32, c: Color| {
         Paint::color(c).with_font(&[font]).with_font_size(size).with_text_align(Align::Center).with_text_baseline(Baseline::Alphabetic)
     };
-    let _ = cv.fill_text(vw / 2.0, spin_y + 110.0, format!("Launching {}", e.title), &text(fonts.display, title_size, Color::rgbaf(0.93, 0.945, 0.97, a)));
+    let _ = cv.fill_text(vw / 2.0, spin_y + 110.0, format!("{verb} {}", e.title), &text(fonts.display, title_size, Color::rgbaf(0.93, 0.945, 0.97, a)));
     let _ = cv.fill_text(vw / 2.0, spin_y + 156.0, emulator.to_uppercase(), &text(fonts.mono, 24.0, Color::rgbaf(0.9, 0.92, 0.96, 0.6 * a)));
     cv.restore();
 }
