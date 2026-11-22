@@ -46,6 +46,8 @@ const RENDER_PARAM_OPENGL_FBO: c_int = 3;
 const RENDER_PARAM_FLIP_Y: c_int = 4;
 
 pub const EVENT_SHUTDOWN: i32 = 1;
+/// A newly loaded file is open (its first frame follows with PLAYBACK_RESTART).
+pub const EVENT_FILE_LOADED: i32 = 8;
 /// Playback (re)started after loading or seeking: the new file has frames.
 pub const EVENT_PLAYBACK_RESTART: i32 = 21;
 
@@ -116,9 +118,13 @@ impl Mpv {
     }
 }
 
-/// Resolves GL function pointers for mpv. Must stay alive as long as any
-/// render context created with it.
+/// Resolves GL function pointers for mpv.
 pub type GetProcAddress = dyn Fn(&CStr) -> *const c_void;
+
+/// The resolver as handed to mpv: mpv keeps a pointer to the inner box, which
+/// lives on the heap, so it stays valid when the `Loader` itself is moved.
+/// Must stay alive as long as any render context created with it.
+pub type Loader = Box<Box<GetProcAddress>>;
 
 unsafe extern "C" fn get_proc_trampoline(ctx: *mut c_void, name: *const c_char) -> *mut c_void {
     let f = unsafe { &*(ctx as *const Box<GetProcAddress>) };
@@ -143,10 +149,13 @@ impl Player {
 
     /// Attaches an OpenGL render context. The GL context must be current.
     /// `loader` must outlive the player.
-    pub fn init_gl(&mut self, loader: &Box<GetProcAddress>) -> Result<()> {
+    pub fn init_gl(&mut self, loader: &Loader) -> Result<()> {
+        // The trampoline needs the (thin) address of the inner box itself.
+        #[allow(clippy::borrowed_box)]
+        let inner: &Box<GetProcAddress> = loader;
         let mut init = OpenGlInitParams {
             get_proc_address: get_proc_trampoline,
-            get_proc_address_ctx: loader as *const Box<GetProcAddress> as *mut c_void,
+            get_proc_address_ctx: inner as *const Box<GetProcAddress> as *mut c_void,
         };
         let api_type = CString::new("opengl")?;
         let mut params = [

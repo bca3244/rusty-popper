@@ -42,7 +42,8 @@ pub struct Wheel {
     n: i64,
     pub info_t: f32,
     last_sel: usize,
-    pub changed_at: f32,
+    /// Seconds since start (f64: an f32 loses the fractions after days of uptime).
+    pub changed_at: f64,
     /// Direction of the last step (+1 next, -1 previous), for slide transitions.
     pub last_dir: i64,
 }
@@ -76,7 +77,7 @@ impl Wheel {
     }
 
     /// Advances the animation. Returns true when the selection changed.
-    pub fn update(&mut self, dt: f32, now: f32) -> bool {
+    pub fn update(&mut self, dt: f32, now: f64) -> bool {
         let k = 1.0 - (-dt * SPRING).exp();
         self.pos += (self.target as f32 - self.pos) * k;
         if (self.target as f32 - self.pos).abs() < 0.0005 {
@@ -367,6 +368,7 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
 
 /// Mirrored bottom half of an image under a logo whose bottom edge is at `top`.
 /// `clip_x` limits it to one strip of a turned cover.
+#[allow(clippy::too_many_arguments)]
 fn reflection(cv: &mut Cv, img: ImageId, x: f32, top: f32, w: f32, h: f32, alpha: f32, clip_x: Option<(f32, f32)>) {
     cv.save();
     cv.translate(0.0, top);
@@ -550,6 +552,7 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
 
 /// "Launching <game>" / "Exiting <game>" screen shown on the playfield while the emulator starts or closes
 /// (and left behind the game window, so the desktop never shows).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, verb: &str, emulator: &str, t: f32, fonts: &Fonts) {
     let s = (h / DESIGN_H).min(w / DESIGN_H);
     let (vw, dh) = (w / s, h / s);
