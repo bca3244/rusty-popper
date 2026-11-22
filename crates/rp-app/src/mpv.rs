@@ -186,6 +186,10 @@ impl Player {
         Ok(())
     }
 
+    pub fn set_pause(&self, paused: bool) -> Result<()> {
+        self.command(&["set", "pause", if paused { "yes" } else { "no" }])
+    }
+
     /// Loads a file in a loop, or stops (black) when there is none.
     pub fn show(&self, media: Option<&Path>) -> Result<()> {
         match media {

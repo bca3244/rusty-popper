@@ -176,6 +176,21 @@ impl Joysticks {
         self.ids.len()
     }
 
+    /// Marks every bound button that is down right now as already handled,
+    /// so it only fires again after being released.
+    pub fn swallow_held(&mut self, bindings: &Bindings) {
+        let now = Instant::now();
+        self.held.clear();
+        for &id in &self.ids {
+            let Some(buttons) = Self::read(id) else { continue };
+            for &(b, _) in &bindings.joy {
+                if buttons & (1 << (b - 1)) != 0 {
+                    self.held.push((id, b, now, now + Duration::from_secs(3600)));
+                }
+            }
+        }
+    }
+
     pub fn poll(&mut self, bindings: &Bindings, out: &mut Vec<Action>) {
         if bindings.joy.is_empty() {
             return;

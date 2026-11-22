@@ -49,6 +49,7 @@ struct Args {
     seconds: Option<u64>,
     list: bool,
     dry_run: bool,
+    print_launch: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -60,6 +61,7 @@ fn parse_args() -> Result<Args> {
         seconds: None,
         list: false,
         dry_run: false,
+        print_launch: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -75,6 +77,7 @@ fn parse_args() -> Result<Args> {
             "--seconds" => a.seconds = Some(val()?.parse()?),
             "--list" => a.list = true,
             "--dry-run" => a.dry_run = true,
+            "--print-launch" => a.print_launch = true,
             other => bail!("unknown argument {other}"),
         }
     }
@@ -98,6 +101,7 @@ fn find_mpv_dll(explicit: Option<PathBuf>) -> Result<PathBuf> {
 /// A game on the wheel with its resolved media.
 struct Item {
     game: Game,
+    emu: Emulator,
     emu_name: String,
     media_dir: PathBuf,
     wheel_png: Option<PathBuf>,
@@ -132,7 +136,7 @@ fn load_items(popper: &std::path::Path, emus: &[Emulator], games: Vec<Game>) -> 
             let emu = emus.iter().find(|e| e.id == game.emu_id)?; // hidden emulators drop out
             let media_dir = emu.media_dir.clone().unwrap_or_else(|| popper.join("POPMedia").join(&emu.name));
             let wheel_png = config::find_wheel(&media_dir, &game.name);
-            Some(Item { emu_name: emu.name.clone(), media_dir, wheel_png, game })
+            Some(Item { emu_name: emu.name.clone(), emu: emu.clone(), media_dir, wheel_png, game })
         })
         .collect()
 }
@@ -186,6 +190,15 @@ fn main() -> Result<()> {
         println!("  {:?}: {}x{} at {},{} rot {} -> {}", s.slot, s.width, s.height, s.x, s.y, s.rotation, m.as_ref().map_or("(none)".into(), |p| p.display().to_string()));
     }
 
+    if args.print_launch {
+        let it = &items[start];
+        let job = rp_launch::LaunchJob { popper_dir: args.popper.clone(), emulator: it.emu.clone(), game: it.game.clone() };
+        println!("--- launch script ---
+{}
+--- post script ---
+{}", job.fill(&it.emu.launch_script), job.fill(&it.emu.post_script));
+        return Ok(());
+    }
     let dll = find_mpv_dll(args.mpv)?;
     let mpv = mpv::Mpv::load(&dll)?;
     println!("libmpv: {}", dll.display());
@@ -207,6 +220,8 @@ fn main() -> Result<()> {
         gfx: None,
         error: None,
         menu: None,
+        popper_dir: args.popper.clone(),
+        playing: None,
     };
     event_loop.run_app(&mut app)?;
     if let Some(e) = app.error {
@@ -284,6 +299,9 @@ struct App {
     gfx: Option<Gfx>,
     error: Option<anyhow::Error>,
     menu: Option<ExitMenu>,
+    popper_dir: PathBuf,
+    /// The game currently running, if any: finishes when the worker sends.
+    playing: Option<Receiver<Result<rp_launch::Outcome>>>,
 }
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
@@ -447,12 +465,37 @@ impl App {
             JumpPrev => g.wheel.step(-10),
             JumpNext => g.wheel.step(10),
             ToggleStyle => self.style = self.style.toggled(),
-            Start => println!("Start pressed on {} (launching comes in the next step)", self.items[g.wheel.selected()].game.display),
+            Start => {
+                let sel = g.wheel.selected();
+                self.launch(sel);
+            }
             Quit => el.exit(),
         }
     }
 
     fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
+        // While a game runs our windows are hidden: just wait for it to end.
+        if let Some(rx) = &self.playing {
+            match rx.try_recv() {
+                Ok(result) => {
+                    match result {
+                        Ok(outcome) => println!("Back from game ({outcome:?})"),
+                        Err(e) => eprintln!("Launch failed: {e:#}"),
+                    }
+                    self.playing = None;
+                    self.return_from_game();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(100)));
+                    return Ok(());
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.playing = None;
+                    self.return_from_game();
+                }
+            }
+            el.set_control_flow(ControlFlow::Poll);
+        }
         let mut actions = Vec::new();
         {
             let Some(g) = self.gfx.as_mut() else { return Ok(()) };
@@ -537,6 +580,44 @@ impl App {
             el.exit();
         }
         Ok(())
+    }
+
+    /// Hides the menu, pauses all video and runs the selected game's
+    /// emulator scripts on a worker thread.
+    fn launch(&mut self, index: usize) {
+        if self.playing.is_some() {
+            return;
+        }
+        let Some(g) = self.gfx.as_mut() else { return };
+        let item = &self.items[index];
+        let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: item.emu.clone(), game: item.game.clone() };
+        for o in &g.outs {
+            let _ = o.player.set_pause(true);
+            o.window.set_visible(false);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("game".into())
+            .spawn(move || {
+                let _ = tx.send(job.run());
+            })
+            .expect("spawn game thread");
+        self.playing = Some(rx);
+    }
+
+    /// Brings the menu back after a game: screens, video and focus.
+    fn return_from_game(&mut self) {
+        let Some(g) = self.gfx.as_mut() else { return };
+        let item = &self.items[g.shown];
+        for o in &g.outs {
+            let _ = o.player.set_pause(false);
+            o.show(item.media(o.screen.slot).as_deref());
+        }
+        g.outs[0].window.set_visible(true);
+        g.outs[0].window.focus_window();
+        // Buttons still held from the game (e.g. Exit) must not fire in the menu.
+        g.joysticks.swallow_held(&self.bindings);
+        g.last = Instant::now();
     }
 
     fn shutdown(&mut self) {
