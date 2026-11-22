@@ -99,21 +99,6 @@ pub fn attach_parent_console() {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn window_must_span_the_whole_screen_to_cover_it() {
-        let screen = (1920, 0, 1080, 1920);
-        let r = |left, top, right, bottom| RECT { left, top, right, bottom };
-        assert!(covers(&r(1920, 0, 3000, 1920), screen));
-        assert!(covers(&r(1912, -8, 3008, 1928), screen)); // maximized windows overhang
-        assert!(!covers(&r(2000, 100, 2600, 700), screen));
-        assert!(!covers(&r(0, 0, 1920, 1080), screen)); // on another monitor
-    }
-}
-
 /// Shows an error box on top of everything (the playfield on a cabinet).
 /// Skipped when RP_NO_DIALOG is set (automated runs) or a console is attached.
 pub fn show_error(title: &str, text: &str) {
@@ -126,5 +111,20 @@ pub fn show_error(title: &str, text: &str) {
     let (t, m) = (w(title), w(text));
     unsafe {
         MessageBoxW(std::ptr::null_mut(), m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_must_span_the_whole_screen_to_cover_it() {
+        let screen = (1920, 0, 1080, 1920);
+        let r = |left, top, right, bottom| RECT { left, top, right, bottom };
+        assert!(covers(&r(1920, 0, 3000, 1920), screen));
+        assert!(covers(&r(1912, -8, 3008, 1928), screen)); // maximized windows overhang
+        assert!(!covers(&r(2000, 100, 2600, 700), screen));
+        assert!(!covers(&r(0, 0, 1920, 1080), screen)); // on another monitor
     }
 }

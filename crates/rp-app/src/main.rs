@@ -59,8 +59,6 @@ use winit::window::{Window, WindowId};
 /// The always-on menu screens; GameInfo/GameHelp/etc. are on-demand overlays.
 const LIVE: &[Slot] = &[Slot::Topper, Slot::Dmd, Slot::BackGlass, Slot::PlayField, Slot::FullDmd];
 
-/// Where Popper installs by default.
-
 /// Plays shorter than this (a table that failed to load, a mis-press) aren't
 /// counted in Popper's statistics.
 const MIN_PLAY_SECS: u64 = 20;
