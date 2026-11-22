@@ -9,6 +9,11 @@ use std::f32::consts::PI;
 
 pub const DESIGN_H: f32 = 1080.0;
 pub const DESIGN_W: f32 = 1920.0;
+/// Cover flow geometry (design units / radians): distance of the first side
+/// cover, step between the next ones, and how far side covers are turned.
+const FLOW_FIRST: f32 = 390.0;
+const FLOW_STEP: f32 = 270.0;
+const FLOW_TURN: f32 = 0.85;
 /// Delay after the selection settles before media on the screens is swapped.
 pub const MEDIA_DEBOUNCE: f32 = 0.16;
 /// Fade-in time of the new playfield video after a swap.
@@ -317,8 +322,10 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
         let sgn = d.signum();
         let a1 = a.min(1.0);
         let squeeze = (vw / DESIGN_W).clamp(0.6, 1.0);
-        let off = (a1 * 400.0 + (a - 1.0).max(0.0) * 135.0) * sgn * squeeze;
-        let theta = -sgn * a1 * 1.2;
+        // Even spacing: the first cover sits a bit further out than the step between
+        // the rest (it clears the big centre cover), the others follow evenly.
+        let off = (a1 * FLOW_FIRST + (a - 1.0).max(0.0) * FLOW_STEP) * sgn * squeeze;
+        let theta = -sgn * a1 * FLOW_TURN;
         let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
         let (w, hgt) = fit(aspect, 520.0, 330.0);
         let alpha = clamp(1.3 - a * 0.2, 0.0, 1.0) * clamp(shown + 1.0 - a, 0.0, 1.0);
