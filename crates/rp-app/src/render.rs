@@ -170,6 +170,28 @@ impl App {
             return Ok(()); // a button just launched a game
         }
         self.attract_tick();
+        // A fresh update that has run for a minute has proved itself.
+        if !self.update_confirmed && STARTED.get().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
+            self.update_confirmed = true;
+            updater::confirm(&exe_dir());
+        }
+        // An update downloaded from Options: swap it in and restart (never mid-game).
+        if self.playing.is_none() {
+            if let updater::Status::Staged { version, dir } = self.updater.status() {
+                // Mark it first: el.exit() only takes effect after this frame.
+                self.updater.restarting(version.clone());
+                match updater::apply_and_restart(&dir, &exe_dir(), &version) {
+                    Ok(()) => {
+                        el.exit();
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        log::error!("Installing the update failed: {e:#}");
+                        self.updater.fail(format!("{e:#}"));
+                    }
+                }
+            }
+        }
         // The "no card" notice closes by itself.
         if self.card.as_ref().is_some_and(|c| c.expired()) {
             self.close_card();
@@ -287,6 +309,11 @@ impl App {
             fonts: &g.fonts,
             video_fade: fade,
             letter,
+            update_note: match self.updater.status() {
+                updater::Status::Available(r) => Some(format!("UPDATE v{} AVAILABLE", r.version)),
+                updater::Status::Downloading { percent, .. } => Some(format!("DOWNLOADING UPDATE {percent}%")),
+                _ => None,
+            },
         };
         wheel::draw(&mut g.canvas, lw, lh, &frame);
         if let Some(menu) = &self.menu {

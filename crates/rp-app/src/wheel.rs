@@ -114,6 +114,8 @@ pub struct Frame<'a> {
     pub video_fade: f32,
     /// Letter jump indicator: the letter and seconds since the jump.
     pub letter: Option<(char, f32)>,
+    /// "Update v… available" note, shown small in the corner.
+    pub update_note: Option<String>,
 }
 
 impl Frame<'_> {
@@ -498,6 +500,9 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
         let _ = cv.fill_text(chip_x + 17.0, chip_top + 30.5, chip, &shadow);
         let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
         chip_x += w + 12.0;
+    }
+    if let Some(note) = &f.update_note {
+        let _ = cv.fill_text(vw - 96.0, y - 76.0, note, &text(f.fonts.mono, 22.0, Color::rgbaf(1.0, 0.75, 0.33, 0.95), Align::Right));
     }
     let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
     let counter = format!("{:02} / {}", idx + 1, f.order.len());

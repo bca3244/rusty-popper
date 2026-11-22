@@ -27,6 +27,7 @@ mod render;
 mod session;
 mod settings;
 mod sfx;
+mod updater;
 mod video;
 mod wheel;
 mod win;
@@ -177,6 +178,16 @@ fn main() {
         Err(e) => {
             log::error!("{e:#}");
             log::logger().flush();
+            // A freshly installed update that can't start goes straight back
+            // to the previous version.
+            if updater::on_probation(&exe_dir()) {
+                if let Err(r) = updater::rollback(&exe_dir(), &format!("{e:#}")) {
+                    log::error!("Rollback failed: {r:#}");
+                } else {
+                    log::logger().flush();
+                    std::process::exit(1);
+                }
+            }
             // Started at logon there's no console, so say what went wrong on
             // screen rather than leaving a bare desktop.
             win::show_error(
@@ -194,6 +205,10 @@ fn run() -> Result<()> {
     let args = parse_args()?;
     RESTARTED.store(args.restarted, Ordering::Relaxed);
     log::info!("Rusty Popper {} starting", env!("CARGO_PKG_VERSION"));
+    if updater::start_probation(&exe_dir()) == updater::Probation::GiveUp {
+        updater::rollback(&exe_dir(), "the new version kept failing to start")?;
+        return Ok(());
+    }
     let settings = Settings::load(&exe_dir().join("rusty-popper.toml"));
     let style = args.wheel.unwrap_or(settings.wheel.style);
     let found = discover::find_popper(args.popper.clone(), settings.paths.popper_dir.clone())?;
@@ -280,6 +295,8 @@ fn run() -> Result<()> {
         screens,
         card_screens,
         card: None,
+        updater: updater::Updater::new(settings.update.check, &settings.update.repo, &exe_dir()),
+        update_confirmed: false,
         sounds: sfx::Sounds::load(
             &settings.sound.dir.clone().unwrap_or_else(|| popper.join("PUPVideos").join("PinUpMenu").join("PuPSounds")),
             settings.sound.enabled,
@@ -470,7 +487,7 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 8; // style, attract, idle, interval, volume, sounds, sound volume, back
+const OPTION_ROWS: usize = 9; // style, attract, idle, interval, volume, sounds, sound volume, update, back
 
 fn next_choice(choices: &[u64], cur: u64) -> u64 {
     let i = choices.iter().position(|&c| c > cur).unwrap_or(0);
@@ -530,6 +547,9 @@ struct App {
     /// The info / help card being shown.
     card: Option<overlay::Card>,
     sounds: sfx::Sounds,
+    updater: updater::Updater,
+    /// Whether a fresh update has been confirmed as working (or there was none).
+    update_confirmed: bool,
     /// The games and playlists, as last read from Popper's database.
     lib: Library,
     bindings: input::Bindings,
