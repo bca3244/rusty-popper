@@ -211,7 +211,7 @@ fn wait_for_game(emu_dir: &Path, since: u64, phase: &AtomicU8) -> Outcome {
     }
     let played = Instant::now();
     while !running(&mut sys).is_empty() {
-        std::thread::sleep(Duration::from_millis(750));
+        std::thread::sleep(Duration::from_millis(250));
     }
     Outcome::Finished { secs: played.elapsed().as_secs() }
 }
