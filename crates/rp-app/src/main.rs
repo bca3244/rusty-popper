@@ -707,6 +707,9 @@ impl App {
     fn act(&mut self, el: &ActiveEventLoop, action: input::Action) {
         use input::Action::*;
         self.last_input = Instant::now();
+        if std::env::var_os("RP_DEBUG_INPUT").is_some() {
+            println!("action {action:?}");
+        }
         // Any button just wakes the menu from attract mode.
         if self.attract_on {
             self.attract_on = false;
@@ -989,6 +992,11 @@ impl App {
         if self.playing.is_some() {
             return;
         }
+        // RP_NO_LAUNCH=1: log instead of starting a table (for automated tests).
+        if std::env::var_os("RP_NO_LAUNCH").is_some() {
+            println!("(RP_NO_LAUNCH) would launch {}", self.items[index].game.display);
+            return;
+        }
         let Some(g) = self.gfx.as_mut() else { return };
         let item = &self.items[index];
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: item.emu.clone(), game: item.game.clone() };
@@ -1104,7 +1112,10 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => el.exit(),
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+            // Synthetic presses are winit replaying held keys when focus moves
+            // between our windows (e.g. a screen shown/hidden by a media swap);
+            // acting on them made one Start press both switch playlist and launch.
+            WindowEvent::KeyboardInput { event, is_synthetic, .. } if event.state == ElementState::Pressed && !is_synthetic => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     if let Some(a) = self.bindings.key(code, event.repeat) {
                         self.act(el, a);
