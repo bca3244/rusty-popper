@@ -192,6 +192,7 @@ impl App {
                 }
             }
         }
+        self.poll_card();
         // The "no card" notice closes by itself.
         if self.card.as_ref().is_some_and(|c| c.expired()) {
             self.close_card();

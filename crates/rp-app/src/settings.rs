@@ -283,8 +283,18 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
 /// Writes the editable values into rusty-popper.toml. The new contents go to
 /// a temp file that then replaces the old one, so a power cut mid-save can't
 /// leave a half-written settings file.
+/// The file's text, or empty if there's no file yet. Any other read error is
+/// passed on, so a file we can't read is never overwritten.
+fn read_existing(path: &Path) -> anyhow::Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn save(path: &Path, v: &Editable) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = read_existing(path)?;
     let new = updated(&text, v)?;
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, new)?;
@@ -296,9 +306,10 @@ pub fn save(path: &Path, v: &Editable) -> anyhow::Result<()> {
 /// rest of rusty-popper.toml as it is.
 pub fn save_popper_dir(path: &Path, dir: &Path) -> anyhow::Result<()> {
     use toml_edit::{value, DocumentMut, Item, Table};
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = read_existing(path)?;
     let mut doc: DocumentMut = text.parse()?;
-    if !doc.contains_table("paths") {
+    // `[paths]` may also be written inline (`paths = { mpv_dll = ".." }`).
+    if !doc.get("paths").is_some_and(|p| p.is_table_like()) {
         doc.insert("paths", Item::Table(Table::new()));
     }
     doc["paths"]["popper_dir"] = value(dir.display().to_string());
@@ -322,6 +333,19 @@ mod tests {
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs), (180, 12));
         assert!(s.launch.ignore_processes.is_empty() && s.paths.popper_dir.is_none());
         assert!(Settings::parse("[wheel\nstyle=").is_err());
+    }
+
+    #[test]
+    fn save_popper_dir_handles_inline_paths() {
+        let dir = std::env::temp_dir().join(format!("rp-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("t.toml");
+        std::fs::write(&f, "# keep\npaths = { mpv_dll = 'C:/x/libmpv-2.dll' }\n").unwrap();
+        save_popper_dir(&f, Path::new("D:/Popper")).unwrap();
+        let s = Settings::parse(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(s.paths.popper_dir.as_deref(), Some(Path::new("D:/Popper")));
+        assert_eq!(s.paths.mpv_dll.as_deref(), Some(Path::new("C:/x/libmpv-2.dll")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

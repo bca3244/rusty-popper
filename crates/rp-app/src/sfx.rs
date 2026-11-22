@@ -154,8 +154,8 @@ fn parse_wav(b: &[u8]) -> Result<Pcm, String> {
     let channels = u16::from_le_bytes([fmt[2], fmt[3]]);
     let rate = u32::from_le_bytes(fmt[4..8].try_into().unwrap());
     let bits = u16::from_le_bytes([fmt[14], fmt[15]]);
-    if tag != 1 || bits != 16 || !(1..=2).contains(&channels) {
-        return Err(format!("unsupported WAV (format {tag}, {bits}-bit, {channels} channels); need 16-bit PCM"));
+    if tag != 1 || bits != 16 || !(1..=2).contains(&channels) || !(1..=192_000).contains(&rate) {
+        return Err(format!("unsupported WAV (format {tag}, {bits}-bit, {channels} channels); need 16-bit PCM up to 192 kHz"));
     }
     let samples = data.as_chunks::<2>().0.iter().map(|s| i16::from_le_bytes(*s)).collect();
     Ok(Pcm { channels, rate, samples })
