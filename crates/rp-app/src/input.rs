@@ -1,4 +1,4 @@
-//! Menu input: keyboard (winit) plus joystick buttons (winmm, the same
+﻿//! Menu input: keyboard (winit) plus joystick buttons (winmm, the same
 //! 1-based button numbers Popper stores in PinUPFunctions.JoyCodes).
 
 use rp_db::Function;
@@ -11,6 +11,9 @@ pub enum Action {
     Next,
     PagePrev,
     PageNext,
+    /// Jump 10 games (keyboard Up/Down).
+    JumpPrev,
+    JumpNext,
     Start,
     Quit,
     ToggleStyle,
@@ -19,7 +22,7 @@ pub enum Action {
 impl Action {
     /// Browsing actions auto-repeat while held.
     fn repeats(self) -> bool {
-        matches!(self, Action::Prev | Action::Next | Action::PagePrev | Action::PageNext)
+        matches!(self, Action::Prev | Action::Next | Action::PagePrev | Action::PageNext | Action::JumpPrev | Action::JumpNext)
     }
 
     fn from_popper(name: &str) -> Option<Action> {
@@ -48,8 +51,8 @@ impl Bindings {
             (KeyCode::ShiftLeft, Action::Prev),
             (KeyCode::ArrowRight, Action::Next),
             (KeyCode::ShiftRight, Action::Next),
-            (KeyCode::ArrowUp, Action::PagePrev),
-            (KeyCode::ArrowDown, Action::PageNext),
+            (KeyCode::ArrowUp, Action::JumpPrev),
+            (KeyCode::ArrowDown, Action::JumpNext),
             (KeyCode::Enter, Action::Start),
             (KeyCode::NumpadEnter, Action::Start),
             (KeyCode::Escape, Action::Quit),

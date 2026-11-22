@@ -391,8 +391,12 @@ impl App {
         match action {
             Prev => g.wheel.step(-1),
             Next => g.wheel.step(1),
-            PagePrev => g.wheel.step(-10),
-            PageNext => g.wheel.step(10),
+            // On Brian's cabinet Popper's "Page" functions sit on the flipper
+            // buttons and step one game, so they do the same here.
+            PagePrev => g.wheel.step(-1),
+            PageNext => g.wheel.step(1),
+            JumpPrev => g.wheel.step(-10),
+            JumpNext => g.wheel.step(10),
             ToggleStyle => self.style = self.style.toggled(),
             Start => println!("Start pressed on {} (launching comes in the next step)", self.items[g.wheel.selected()].game.display),
             Quit => el.exit(),
