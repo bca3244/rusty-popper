@@ -55,11 +55,10 @@ impl Phase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
-    /// The game ran and exited.
-    Finished,
+    /// The game ran and exited after this many seconds.
+    Finished { secs: u64 },
     /// No game process appeared in time (bad script, missing table...).
-    NeverStarted,
-}
+    NeverStarted,}
 
 impl LaunchJob {
     fn game_full_path(&self) -> PathBuf {
@@ -210,8 +209,9 @@ fn wait_for_game(emu_dir: &Path, since: u64, phase: &AtomicU8) -> Outcome {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    let played = Instant::now();
     while !running(&mut sys).is_empty() {
         std::thread::sleep(Duration::from_millis(750));
     }
-    Outcome::Finished
+    Outcome::Finished { secs: played.elapsed().as_secs() }
 }

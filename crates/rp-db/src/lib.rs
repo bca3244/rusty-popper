@@ -1,7 +1,8 @@
-//! Read-only access to Popper's PUPDatabase.db (Games, Emulators, Playlists).
+//! Access to Popper's PUPDatabase.db (Games, Emulators, Playlists).
 //!
-//! The live DB is copied to a temp file first and the copy is opened read-only,
-//! so a running PinUpMenu/VPin-Studio is never locked or modified.
+//! Reading uses a temp copy opened read-only, so a running PinUpMenu or VPin
+//! Studio is never locked. The only writes are play statistics, through
+//! [`StatsWriter`], which backs the DB up first.
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
@@ -160,5 +161,108 @@ impl PopperDb {
 impl Drop for PopperDb {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self._copy);
+    }
+}
+
+/// Writes to the live PUPDatabase.db. Only play statistics are touched, in
+/// the same format Popper uses, and a backup is taken before the first write.
+pub struct StatsWriter {
+    live: PathBuf,
+    backup_dir: PathBuf,
+    backed_up: bool,
+}
+
+impl StatsWriter {
+    pub fn new(live: &Path, backup_dir: &Path) -> Self {
+        StatsWriter { live: live.to_path_buf(), backup_dir: backup_dir.to_path_buf(), backed_up: false }
+    }
+
+    /// Consistent copy of the live DB (VACUUM INTO), keeping the newest 10.
+    pub fn backup(&mut self) -> Result<PathBuf> {
+        std::fs::create_dir_all(&self.backup_dir)?;
+        let name = format!("PUPDatabase-{}.db", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        let dest = self.backup_dir.join(name);
+        let conn = Connection::open_with_flags(&self.live, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.execute("VACUUM INTO ?1", [dest.to_string_lossy()])
+            .with_context(|| format!("backing up to {}", dest.display()))?;
+        let mut old: Vec<PathBuf> = std::fs::read_dir(&self.backup_dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("PUPDatabase-")))
+            .collect();
+        old.sort();
+        while old.len() > 10 {
+            let _ = std::fs::remove_file(old.remove(0));
+        }
+        self.backed_up = true;
+        Ok(dest)
+    }
+
+    /// Counts one play of `game_id` lasting `secs` in GamesStats, like Popper:
+    /// LastPlayed in local time ("YYYY-MM-DD HH:MM:SS.mmm"), NumberPlays + 1,
+    /// TimePlayedSecs + secs.
+    pub fn record_play(&mut self, game_id: i64, secs: u64) -> Result<()> {
+        if !self.backed_up {
+            self.backup()?;
+        }
+        let mut conn = Connection::open(&self.live)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let tx = conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE GamesStats SET LastPlayed = ?1, NumberPlays = COALESCE(NumberPlays, 0) + 1,
+                    TimePlayedSecs = COALESCE(TimePlayedSecs, 0) + ?2 WHERE GameID = ?3",
+            rusqlite::params![now, secs as i64, game_id],
+        )?;
+        if updated == 0 {
+            tx.execute(
+                "INSERT INTO GamesStats (GameID, LastPlayed, NumberPlays, TimePlayedSecs) VALUES (?1, ?2, 1, ?3)",
+                rusqlite::params![game_id, now, secs as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_play_updates_or_inserts_and_backs_up() {
+        let dir = std::env::temp_dir().join(format!("rp-db-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("PUPDatabase.db");
+        let conn = Connection::open(&live).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE GamesStats (UniqueID INTEGER PRIMARY KEY AUTOINCREMENT, GameID INTEGER,
+                 LastPlayed DATETIME, NumberPlays INTEGER DEFAULT (0), TimePlayedSecs INTEGER, HighScores TEXT);
+             INSERT INTO GamesStats (GameID, LastPlayed, NumberPlays, TimePlayedSecs) VALUES (7, '2026-01-01 00:00:00.000', 3, 100);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut w = StatsWriter::new(&live, &dir.join("backups"));
+        w.record_play(7, 60).unwrap();
+        w.record_play(9, 30).unwrap();
+
+        let conn = Connection::open(&live).unwrap();
+        let (plays, secs, last): (i64, i64, String) = conn
+            .query_row("SELECT NumberPlays, TimePlayedSecs, LastPlayed FROM GamesStats WHERE GameID = 7", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!((plays, secs), (4, 160));
+        assert_eq!(last.len(), "2026-11-21 21:03:41.942".len());
+        let (plays9, secs9): (i64, i64) =
+            conn.query_row("SELECT NumberPlays, TimePlayedSecs FROM GamesStats WHERE GameID = 9", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((plays9, secs9), (1, 30));
+        // Exactly one backup, taken before the first write (so it has the original row).
+        let backups: Vec<_> = std::fs::read_dir(dir.join("backups")).unwrap().collect();
+        assert_eq!(backups.len(), 1);
+        let b = Connection::open(backups[0].as_ref().unwrap().path()).unwrap();
+        let orig: i64 = b.query_row("SELECT NumberPlays FROM GamesStats WHERE GameID = 7", [], |r| r.get(0)).unwrap();
+        assert_eq!(orig, 3);
+        drop((conn, b));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
