@@ -63,6 +63,10 @@ impl App {
         let cur_title = current.map(|it| it.title.clone());
         let playlist_name = self.lib.playlist_name(self.playlist).to_string();
 
+        // Often only a playlist's contents changed (our own statistics write
+        // reorders "Most Played"): then the logos and, where possible, the
+        // wheel and the videos are left alone.
+        let same_items = lib.items == self.lib.items;
         self.lib = lib;
         log::info!("Popper's database changed: now {} games, {} playlists", self.lib.game_count, self.lib.playlists.len());
         self.bindings = input::Bindings::new(&self.lib.functions, &self.joy_overrides, self.keyboard_quit);
@@ -70,24 +74,34 @@ impl App {
         if !self.lib.has_games(self.playlist) {
             self.playlist = 0;
         }
-        self.view = self.lib.view(self.playlist).to_vec();
+        let view = self.lib.view(self.playlist).to_vec();
+        let same_view = same_items && view == self.view;
+        self.view = view;
         let same = |it: &Item| match cur_game {
             Some(id) => it.game_id() == Some(id),
             None => it.is_playlist() && Some(&it.title) == cur_title.as_ref(),
         };
         let pos = self.view.iter().position(|&i| same(&self.lib.items[i])).unwrap_or(0);
         let Some(g) = self.gfx.as_mut() else { return };
-        g.release_logos(None);
-        g.entries = self.lib.items.iter().map(Item::entry).collect();
-        g.wheel = wheel::Wheel::new(self.view.len().max(1), pos);
-        let item = self.view.get(pos).copied().unwrap_or(0);
-        g.shown = item;
-        g.swapped_at = (Instant::now() - g.t0).as_secs_f64();
-        for o in g.outs.iter_mut() {
-            o.slide = None;
-            o.show(self.lib.items[item].media(o.screen.slot).as_deref());
+        if !same_items {
+            g.release_logos(None);
+            g.entries = self.lib.items.iter().map(Item::entry).collect();
         }
-        g.load_logos(&self.lib.items, item);
+        if !same_view {
+            g.wheel = wheel::Wheel::new(self.view.len().max(1), pos);
+        }
+        let item = self.view.get(pos).copied().unwrap_or(0);
+        if !same_items || (!same_view && item != g.shown) {
+            g.shown = item;
+            g.swapped_at = (Instant::now() - g.t0).as_secs_f64();
+            for o in g.outs.iter_mut() {
+                o.slide = None;
+                o.show(self.lib.items[item].media(o.screen.slot).as_deref());
+            }
+        }
+        if !same_items {
+            g.load_logos(&self.lib.items, item);
+        }
     }
 
     /// Keeps the keyboard focus on the menu: right after a game it is taken
