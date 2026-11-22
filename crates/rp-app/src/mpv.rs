@@ -167,14 +167,15 @@ impl Player {
         self.render_to(0, w, h);
     }
 
-    /// Draws the current video frame into framebuffer object `fbo`, top row first
-    /// (so a texture attached to it reads the right way up).
+    /// Draws the current video frame into framebuffer object `fbo` (0 = the window).
     pub fn render_to(&self, fbo: i32, w: i32, h: i32) {
         if self.render.is_null() {
             return;
         }
+        // The window (fbo 0) has a bottom-left origin, so mpv flips for it; a
+        // texture we sample with femtovg wants the unflipped image.
+        let mut flip: c_int = if fbo == 0 { 1 } else { 0 };
         let mut fbo = OpenGlFbo { fbo, w, h, internal_format: 0 };
-        let mut flip: c_int = 1;
         let mut params = [
             RenderParam { kind: RENDER_PARAM_OPENGL_FBO, data: &mut fbo as *mut _ as *mut c_void },
             RenderParam { kind: RENDER_PARAM_FLIP_Y, data: &mut flip as *mut _ as *mut c_void },
