@@ -90,6 +90,10 @@ const HEALTHY_UPTIME: Duration = Duration::from_secs(300);
 /// If the game's window hasn't been seen by then, the game counts as on
 /// screen this long after its process appeared.
 const GAME_UP_TIMEOUT: Duration = Duration::from_secs(60);
+/// The same for the playfield's "Launching" text: if no game window has
+/// covered the playfield by then, it switches to "Exiting" anyway. Big
+/// tables can take over a minute to load on a first run (textures, shaders).
+const TABLE_UP_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How many restarts in a row led to this run (`--restarted`).
 static RESTARTED: AtomicU32 = AtomicU32::new(0);
@@ -548,6 +552,9 @@ struct Playing {
     /// The game's window is on screen (its process appears well before that,
     /// while the table still loads).
     game_up: bool,
+    /// A game window covers the playfield (the table is drawn): the
+    /// playfield's text behind it switches from "Launching" to "Exiting".
+    table_up: bool,
     /// When the game was seen to exit (restarts the screen's animation).
     exiting_since: Option<Instant>,
     /// Screens not in KeepDisplays are paused (and black) only while the game is on screen.
