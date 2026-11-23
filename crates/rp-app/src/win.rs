@@ -99,21 +99,6 @@ pub fn attach_parent_console() {
     }
 }
 
-/// Shows an error box on top of everything (the playfield on a cabinet).
-/// Skipped when RP_NO_DIALOG is set (automated runs) or a console is attached.
-pub fn show_error(title: &str, text: &str) {
-    use windows_sys::Win32::System::Console::GetConsoleWindow;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_TOPMOST};
-    if std::env::var_os("RP_NO_DIALOG").is_some() || !unsafe { GetConsoleWindow() }.is_null() {
-        return;
-    }
-    let w = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-    let (t, m) = (w(title), w(text));
-    unsafe {
-        MessageBoxW(std::ptr::null_mut(), m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

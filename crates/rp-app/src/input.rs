@@ -210,7 +210,7 @@ impl Joysticks {
         j
     }
 
-    fn read(id: u32) -> Option<u32> {
+    pub(crate) fn read(id: u32) -> Option<u32> {
         use windows_sys::Win32::Media::Multimedia::{joyGetPosEx, JOYINFOEX, JOY_RETURNBUTTONS};
         let mut info: JOYINFOEX = unsafe { std::mem::zeroed() };
         info.dwSize = std::mem::size_of::<JOYINFOEX>() as u32;

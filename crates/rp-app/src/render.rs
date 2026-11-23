@@ -21,6 +21,11 @@ impl App {
         let start_pos = self.view.iter().position(|&i| i == self.start).unwrap_or(0);
         self.start = self.view[start_pos];
         log::info!("Menu rotation: {} deg", self.ui_rotation());
+        if let Some(pf) = self.screens.iter().find(|s| s.slot == Slot::PlayField) {
+            // So an error on a later start can be shown the right way up.
+            let rot = (pf.rotation + self.ui_rotation()).rem_euclid(360);
+            errscreen::remember(&exe_dir(), errscreen::Placement { x: pf.x, y: pf.y, w: pf.width, h: pf.height, rot });
+        }
         // Playfield first: its window creates the GL display and config.
         let mut order: Vec<Screen> = self.screens.clone();
         order.sort_by_key(|s| (s.slot != Slot::PlayField) as u8);

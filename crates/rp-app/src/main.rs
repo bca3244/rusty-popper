@@ -16,6 +16,7 @@
 
 mod assets;
 mod discover;
+mod errscreen;
 mod input;
 mod library;
 mod logging;
@@ -99,6 +100,8 @@ static PROBATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// A fresh copy has already been started, so this one must not roll back or
 /// show an error box over it.
 static SELF_RESTARTED: AtomicBool = AtomicBool::new(false);
+/// The menu got as far as showing (so a later error is a stop, not a failed start).
+static MENU_RAN: AtomicBool = AtomicBool::new(false);
 
 struct Args {
     popper: Option<PathBuf>,
@@ -197,10 +200,9 @@ fn main() {
             // Started at logon there's no console, so say what went wrong on
             // screen rather than leaving a bare desktop.
             if !handed_over {
-                win::show_error(
-                "Rusty Popper couldn't start",
-                    &format!("{e:#}\n\nMore detail is in rusty-popper.log next to rusty-popper.exe."),
-                );
+                let title = if MENU_RAN.load(Ordering::Relaxed) { "Rusty Popper stopped" } else { "Rusty Popper couldn't start" };
+                let rot = Settings::load(&exe_dir().join("rusty-popper.toml")).playfield.ui_rotation;
+                errscreen::show(&exe_dir(), title, &format!("{e:#}"), rot);
             }
             1
         }
@@ -357,6 +359,7 @@ fn run() -> Result<()> {
         joy_blocked: false,
     };
     MENU_UP.store(true, Ordering::Relaxed);
+    MENU_RAN.store(true, Ordering::Relaxed);
     let ran = event_loop.run_app(&mut app);
     MENU_UP.store(false, Ordering::Relaxed);
     ran?;
