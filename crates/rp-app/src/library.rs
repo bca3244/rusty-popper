@@ -99,9 +99,15 @@ pub struct Library {
 
 /// Wheel order for one playlist: its games, then the other playlists as wheel
 /// entries, so they sit where the wheel wraps from the last game to the first.
+/// Inside a playlist the "All games" (go back) wheel comes last, right before
+/// the first game, so one step back from the games reaches it.
 fn view_for(n: usize, games: Vec<usize>, items: &[Item], game_count: usize) -> Vec<usize> {
     let mut view = games;
-    view.extend((game_count..items.len()).filter(|&i| items[i].kind != Kind::Playlist(n)));
+    let others = |i: &usize| !matches!(items[*i].kind, Kind::Playlist(p) if p == n || p == 0);
+    view.extend((game_count..items.len()).filter(others));
+    if n != 0 {
+        view.extend((game_count..items.len()).filter(|&i| items[i].kind == Kind::Playlist(0)));
+    }
     view
 }
 
@@ -284,6 +290,18 @@ mod tests {
         let one: Vec<char> = "AAA".chars().collect();
         assert_eq!(letter_jump(&one, 1, 1), 1);
         assert_eq!(letter_jump(&[], 0, 1), 0);
+    }
+
+    #[test]
+    fn go_back_wheel_sits_right_before_the_games() {
+        // Two games-to-be (stood in for by playlist items: view_for only looks
+        // at kinds past game_count), then All games and three playlists.
+        let item = |k| Item { title: String::new(), media_name: String::new(), media_dir: PathBuf::new(), wheel_png: None, kind: k };
+        let items: Vec<Item> = [9, 9, 0, 1, 2, 3].into_iter().map(|n| item(Kind::Playlist(n))).collect();
+        // In playlist 2: its games, the other playlists, then All games (wrapping to game 0).
+        assert_eq!(view_for(2, vec![1, 0], &items, 2), [1, 0, 3, 5, 2]);
+        // In All games: the games, then every playlist.
+        assert_eq!(view_for(0, vec![0, 1], &items, 2), [0, 1, 3, 4, 5]);
     }
 
     #[test]
