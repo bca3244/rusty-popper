@@ -160,6 +160,16 @@ pub struct SoundSettings {
     pub volume: i32,
     /// Folder with fx_*.wav. Default: Popper's PUPVideos\PinUpMenu\PuPSounds.
     pub dir: Option<std::path::PathBuf>,
+    /// Play the selected game's Audio media (POPMedia\<emulator>\Audio) on the wheel.
+    #[serde(default = "yes")]
+    pub game_audio: bool,
+    /// 0-100.
+    #[serde(default = "default_game_audio_volume")]
+    pub game_audio_volume: i32,
+}
+
+fn default_game_audio_volume() -> i32 {
+    80
 }
 
 fn default_sound_volume() -> i32 {
@@ -168,7 +178,7 @@ fn default_sound_volume() -> i32 {
 
 impl Default for SoundSettings {
     fn default() -> Self {
-        SoundSettings { enabled: true, volume: default_sound_volume(), dir: None }
+        SoundSettings { enabled: true, volume: default_sound_volume(), dir: None, game_audio: true, game_audio_volume: default_game_audio_volume() }
     }
 }
 
@@ -257,6 +267,8 @@ pub struct Editable {
     pub volume: i32,
     pub sound_enabled: bool,
     pub sound_volume: i32,
+    pub game_audio: bool,
+    pub game_audio_volume: i32,
 }
 
 /// `text` (the current file contents) with the editable values set, keeping
@@ -277,6 +289,8 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("audio", "volume", (v.volume as i64).into());
     set("sound", "enabled", v.sound_enabled.into());
     set("sound", "volume", (v.sound_volume as i64).into());
+    set("sound", "game_audio", v.game_audio.into());
+    set("sound", "game_audio_volume", (v.game_audio_volume as i64).into());
     Ok(doc.to_string())
 }
 
@@ -351,7 +365,7 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30 };
+        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50 };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();

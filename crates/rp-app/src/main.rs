@@ -17,6 +17,7 @@
 mod assets;
 mod discover;
 mod errscreen;
+mod gameaudio;
 mod input;
 mod library;
 mod logging;
@@ -310,7 +311,9 @@ fn run() -> Result<()> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let now = Instant::now();
+    let game_audio = gameaudio::GameAudio::new(&mpv, settings.sound.game_audio, settings.sound.game_audio_volume);
     let mut app = App {
+        game_audio,
         mpv,
         screens,
         card_screens,
@@ -521,7 +524,7 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 9; // style, attract, idle, interval, volume, sounds, sound volume, update, back
+const OPTION_ROWS: usize = 11; // style, attract, idle, interval, volume, sounds, sound volume, game audio, game audio volume, update, back
 
 fn next_choice(choices: &[u64], cur: u64) -> u64 {
     let i = choices.iter().position(|&c| c > cur).unwrap_or(0);
@@ -636,6 +639,8 @@ struct App {
     reclaim_until: Instant,
     /// Joystick input was being ignored (another program had the focus).
     joy_blocked: bool,
+    /// The selected game's Audio media, played after a short rest on it.
+    game_audio: gameaudio::GameAudio,
     /// Spots tables started by other programs.
     others: rp_launch::OtherLaunches,
     /// Set while such a table is on screen and the menu has stepped aside.

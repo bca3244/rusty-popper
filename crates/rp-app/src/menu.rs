@@ -158,6 +158,8 @@ impl App {
             format!("Video volume: {}%", self.volume),
             format!("Sound effects: {}", onoff(self.sounds.enabled)),
             format!("Effects volume: {}%", self.sounds.volume),
+            format!("Game audio: {}", onoff(self.game_audio.enabled)),
+            format!("Game audio volume: {}%", self.game_audio.volume),
             self.update_label(),
             "Back".to_string(),
         ]
@@ -177,7 +179,12 @@ impl App {
                 }
             }
             5 => self.sounds.enabled = !self.sounds.enabled,
-            7 => {
+            7 => self.game_audio.set_enabled(!self.game_audio.enabled),
+            8 => {
+                let v = if self.game_audio.volume >= 100 { 0 } else { (self.game_audio.volume / 10 + 1) * 10 };
+                self.game_audio.set_volume(v);
+            }
+            9 => {
                 match self.updater.status() {
                     updater::Status::Available(rel) => self.updater.download(rel),
                     updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
@@ -199,6 +206,8 @@ impl App {
             volume: self.volume,
             sound_enabled: self.sounds.enabled,
             sound_volume: self.sounds.volume,
+            game_audio: self.game_audio.enabled,
+            game_audio_volume: self.game_audio.volume,
         };
         if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
             log::warn!("Couldn't save settings: {e:#}");

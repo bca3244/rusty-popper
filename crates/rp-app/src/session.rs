@@ -8,6 +8,7 @@ impl App {
     /// One tick while a game is loading, running or closing: follow the
     /// worker, watch the exit button, and redraw when it's time.
     pub(crate) fn frame_playing(&mut self, el: &ActiveEventLoop) -> Result<()> {
+        self.game_audio.tick(None, |_| None);
         use rp_launch::Phase;
         let Some(p) = self.playing.as_mut() else { return Ok(()) };
         match p.rx.try_recv() {

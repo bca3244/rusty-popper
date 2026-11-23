@@ -51,6 +51,10 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # enabled = true
 # volume = 70
 # dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'
+# Play the selected game's Audio media (POPMedia\<emulator>\Audio\<game>.mp3)
+# once the wheel rests on it for a moment.
+# game_audio = true
+# game_audio_volume = 80
 
 [update]
 # Look for a newer release on GitHub at startup; install from Exit -> Options.

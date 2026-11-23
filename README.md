@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 - **Every cabinet screen:** playfield, backglass, DMD, FullDMD and topper all follow the selected game, using Popper's own screen layout and playfield rotation.
 - **Launches through Popper's scripts:** VPX, Future Pinball and others start exactly as they do in Popper. "Launching" and "Exiting" screens mean the desktop never shows.
 - **Playlists as wheels:** Popper's playlists sit on the wheel where it wraps from the last game back to the first.
-- **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, and **menu sounds** from Popper's own sound set.
+- **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, **menu sounds** from Popper's own sound set, and each game's **Audio media** once the wheel rests on it.
 - **Play statistics** written back to Popper, so "Most Played" keeps working.
 - **Updates itself:** it tells you when a new release is out and installs it from the Options menu, and goes back to the previous version if the new one won't start.
 
@@ -69,6 +69,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 - Attract mode on or off, how long until it starts, and how long it stays on each game
 - Video volume
 - Sound effects on or off, and their volume
+- Game audio on or off, and its volume
 - Install update / check for updates
 
 ## Updating
@@ -99,7 +100,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 | `[paths]` | `popper_dir` (found automatically) and `mpv_dll` |
 | `[attract]` | `enabled`, `idle_secs`, `interval_secs` |
 | `[audio]` | `volume` for the playfield video |
-| `[sound]` | Menu sound effects: `enabled`, `volume`, `dir` |
+| `[sound]` | Menu sound effects: `enabled`, `volume`, `dir`; game audio: `game_audio`, `game_audio_volume` |
 | `[update]` | `check` for updates at startup, and the `repo` they come from |
 
 ## What it changes

@@ -151,6 +151,7 @@ impl App {
             return self.frame_playing(el);
         }
         if self.watch_other_launch() {
+            self.game_audio.tick(None, |_| None);
             // Nothing to draw or listen to until that table closes.
             el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250)));
             return Ok(());
@@ -180,6 +181,13 @@ impl App {
             return Ok(()); // a button just launched a game
         }
         self.attract_tick();
+        // The selected game's own audio, once the wheel rests on it (not in attract mode).
+        let selected = if self.attract_on { None } else { self.gfx.as_ref().and_then(|g| self.view.get(g.wheel.selected()).copied()) };
+        let lib = &self.lib;
+        self.game_audio.tick(selected, |i| {
+            let it = &lib.items[i];
+            if it.is_playlist() { None } else { gameaudio::find(&it.media_dir, &it.media_name) }
+        });
         // A fresh update that has run for a minute has proved itself.
         if !self.update_confirmed && STARTED.get().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
             self.update_confirmed = true;
