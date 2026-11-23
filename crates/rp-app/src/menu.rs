@@ -155,12 +155,21 @@ impl App {
             format!("Attract mode: {}", onoff(self.attract.enabled)),
             format!("Attract starts after: {}", mins(self.attract.idle_secs)),
             format!("Time per game: {} s", self.attract.interval_secs),
+            "Sound \u{203a}".to_string(),
+            self.update_label(),
+            "Back".to_string(),
+        ]
+    }
+
+    /// Labels for Options → Sound, with current values.
+    pub(crate) fn sound_labels(&self) -> Vec<String> {
+        let onoff = |b: bool| if b { "On" } else { "Off" };
+        vec![
             format!("Video volume: {}%", self.volume),
             format!("Sound effects: {}", onoff(self.sounds.enabled)),
             format!("Effects volume: {}%", self.sounds.volume),
             format!("Game audio: {}", onoff(self.game_audio.enabled)),
             format!("Game audio volume: {}%", self.game_audio.volume),
-            self.update_label(),
             "Back".to_string(),
         ]
     }
@@ -172,19 +181,7 @@ impl App {
             1 => self.attract.enabled = !self.attract.enabled,
             2 => self.attract.idle_secs = next_choice(ATTRACT_IDLE_CHOICES, self.attract.idle_secs),
             3 => self.attract.interval_secs = next_choice(ATTRACT_INTERVAL_CHOICES, self.attract.interval_secs),
-            4 => {
-                self.volume = if self.volume >= 100 { 0 } else { (self.volume / 10 + 1) * 10 };
-                if let Some(g) = &self.gfx {
-                    let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
-                }
-            }
-            5 => self.sounds.enabled = !self.sounds.enabled,
-            7 => self.game_audio.set_enabled(!self.game_audio.enabled),
-            8 => {
-                let v = if self.game_audio.volume >= 100 { 0 } else { (self.game_audio.volume / 10 + 1) * 10 };
-                self.game_audio.set_volume(v);
-            }
-            9 => {
+            5 => {
                 match self.updater.status() {
                     updater::Status::Available(rel) => self.updater.download(rel),
                     updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
@@ -192,12 +189,36 @@ impl App {
                 }
                 return;
             }
-            6 => {
+            _ => return,
+        }
+        self.save_settings();
+    }
+
+    /// Cycles the value on Options → Sound row `row`, applies it, and saves it.
+    pub(crate) fn change_sound(&mut self, row: usize) {
+        match row {
+            0 => {
+                self.volume = if self.volume >= 100 { 0 } else { (self.volume / 10 + 1) * 10 };
+                if let Some(g) = &self.gfx {
+                    let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
+                }
+            }
+            1 => self.sounds.enabled = !self.sounds.enabled,
+            3 => self.game_audio.set_enabled(!self.game_audio.enabled),
+            4 => {
+                let v = if self.game_audio.volume >= 100 { 0 } else { (self.game_audio.volume / 10 + 1) * 10 };
+                self.game_audio.set_volume(v);
+            }
+            2 => {
                 let v = if self.sounds.volume >= 100 { 0 } else { (self.sounds.volume / 10 + 1) * 10 };
                 self.sounds.set_volume(v);
             }
             _ => return,
         }
+        self.save_settings();
+    }
+
+    fn save_settings(&self) {
         let v = settings::Editable {
             style: self.style,
             attract_enabled: self.attract.enabled,
@@ -248,6 +269,7 @@ impl App {
             let n = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.len(),
                 MenuKind::Options => OPTION_ROWS,
+                MenuKind::Sound => SOUND_ROWS,
             };
             match action {
                 Prev | PagePrev | LetterPrev => {
@@ -266,9 +288,25 @@ impl App {
                     let (kind, choice) = (menu.kind, menu.selected);
                     self.sounds.play(sfx::Sfx::Select);
                     // Options rows change in place; the menu stays open.
-                    if kind == MenuKind::Options && choice < OPTION_ROWS - 1 {
-                        self.change_option(choice);
-                        return;
+                    match (kind, choice) {
+                        (MenuKind::Options, SOUND_ROW) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Sound, selected: 0, opened: Instant::now() });
+                            return;
+                        }
+                        (MenuKind::Options, c) if c < OPTION_ROWS - 1 => {
+                            self.change_option(c);
+                            return;
+                        }
+                        (MenuKind::Sound, c) if c < SOUND_ROWS - 1 => {
+                            self.change_sound(c);
+                            return;
+                        }
+                        // Back from Sound returns to Options, on the Sound row.
+                        (MenuKind::Sound, _) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: SOUND_ROW, opened: Instant::now() });
+                            return;
+                        }
+                        _ => {}
                     }
                     self.menu = None;
                     match (kind, choice) {

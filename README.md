@@ -67,9 +67,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 - Wheel style (arc or cover flow)
 - Attract mode on or off, how long until it starts, and how long it stays on each game
-- Video volume
-- Sound effects on or off, and their volume
-- Game audio on or off, and its volume
+- **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume (*Back* returns to Options)
 - Install update / check for updates
 
 ## Updating

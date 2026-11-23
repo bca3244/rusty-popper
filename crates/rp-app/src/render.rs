@@ -216,7 +216,10 @@ impl App {
             self.close_card();
         }
         let style = self.style;
-        let option_labels = self.option_labels();
+        let option_labels = match self.menu.as_ref().map(|m| m.kind) {
+            Some(MenuKind::Sound) => self.sound_labels(),
+            _ => self.option_labels(),
+        };
         let ui_rotation = self.ui_rotation();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
 
@@ -338,11 +341,12 @@ impl App {
         if let Some(menu) = &self.menu {
             let names: Vec<&str> = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.to_vec(),
-                MenuKind::Options => option_labels.iter().map(String::as_str).collect(),
+                MenuKind::Options | MenuKind::Sound => option_labels.iter().map(String::as_str).collect(),
             };
             let title = match menu.kind {
                 MenuKind::Exit => "Exit",
                 MenuKind::Options => "Options",
+                MenuKind::Sound => "Sound",
             };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw, lh, &view, &g.fonts);

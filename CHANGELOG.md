@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.22] - 2026-11-23
+
+### Changed
+- All volume and sound settings (video volume, sound effects, effects volume, game audio, game audio volume) moved into an **Options → Sound** submenu, so Options is shorter. *Back* in Sound returns to Options.
+
 ## [0.2.21] - 2026-11-23
 
 ### Fixed
@@ -142,6 +147,7 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.22]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.22
 [0.2.21]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.21
 [0.2.20]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.20
 [0.2.19]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.19
