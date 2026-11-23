@@ -517,6 +517,13 @@ pub struct MenuView<'a> {
     pub t: f32,
 }
 
+/// Height of one menu row: 96 when the panel fits, smaller when the screen is
+/// too short for that many rows (title 150, padding 40, a 40 margin each side).
+fn menu_row_height(rows: usize, screen_h: f32) -> f32 {
+    let room = (screen_h - 80.0 - 190.0) / rows.max(1) as f32;
+    room.clamp(48.0, 96.0)
+}
+
 /// Draws the exit menu centered over the playfield (same frame as `draw`).
 pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
     let s = (h / DESIGN_H).min(w / DESIGN_H);
@@ -526,7 +533,8 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
     cv.scale(s, s);
     fill_rect(cv, 0.0, 0.0, vw, dh, Color::rgbaf(0.02, 0.025, 0.04, 0.72 * a));
 
-    let row_h = 96.0;
+    // Rows shrink to fit a short (landscape) screen; a portrait playfield has room.
+    let row_h = menu_row_height(m.options.len(), dh);
     let pw = (vw - 160.0).min(820.0);
     let ph = 150.0 + m.options.len() as f32 * row_h + 40.0;
     let (px, py) = ((vw - pw) / 2.0, (dh - ph) / 2.0 + (1.0 - a) * 40.0);
@@ -554,7 +562,7 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
         let c = if sel { Color::rgbaf(0.04, 0.047, 0.07, a) } else { Color::rgbaf(0.88, 0.9, 0.95, 0.85 * a) };
         let paint = Paint::color(c)
             .with_font(&[fonts.body])
-            .with_font_size(42.0)
+            .with_font_size(42.0 * row_h / 96.0)
             .with_text_align(Align::Center)
             .with_text_baseline(Baseline::Middle);
         let _ = cv.fill_text(vw / 2.0, y + row_h / 2.0, opt, &paint);
@@ -605,4 +613,18 @@ pub fn clear_black(cv: &mut Cv, w: u32, h: u32) {
     cv.set_size(w, h, 1.0);
     cv.clear_rect(0, 0, w, h, Color::rgbf(0.0, 0.0, 0.0));
     cv.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_menu_fits_portrait_and_landscape() {
+        // Portrait playfield (1920 design units tall): full-size rows.
+        assert_eq!(menu_row_height(11, 1920.0), 96.0);
+        // Landscape (1080 tall): rows shrink so the panel stays on screen.
+        let r = menu_row_height(11, 1080.0);
+        assert!(r < 96.0 && 190.0 + 11.0 * r <= 1080.0 - 80.0);
+    }
 }
