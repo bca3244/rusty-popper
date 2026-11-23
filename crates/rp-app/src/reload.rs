@@ -163,9 +163,20 @@ impl App {
             return self.aside.is_some();
         }
         self.last_aside_check = now;
+        let rects: Vec<(i32, i32, i32, i32)> = self.screens.iter().map(|s| (s.x, s.y, s.width, s.height)).collect();
         if let Some(a) = &self.aside {
             if self.others.alive(a.pid) {
                 return true;
+            }
+            // The window we followed (a backglass, say) closed, but another of
+            // the table's may still be up: follow that one instead.
+            let (fg, pid) = win::foreground_of(&rects);
+            if fg == win::Foreground::Other {
+                let emulators = self.emulators();
+                if let Some(name) = self.others.emulator_process(pid, &emulators, &self.ignore_processes) {
+                    self.aside = self.aside.take().map(|a| Aside { pid, name, ..a });
+                    return true;
+                }
             }
             let a = self.aside.take().expect("checked above");
             log::info!("{} has closed: menu back", a.name);
@@ -179,12 +190,11 @@ impl App {
             self.attract_on = false;
             // Don't grab the focus straight back: VPin Studio's recorder may be
             // about to start the next table, which needs to come to the front.
-            self.quiet_until = now + Duration::from_secs(10);
+            self.quiet_until = now + Duration::from_secs(6);
             // Buttons held for the table don't count for the menu.
             self.joy_blocked = true;
             return false;
         }
-        let rects: Vec<(i32, i32, i32, i32)> = self.screens.iter().map(|s| (s.x, s.y, s.width, s.height)).collect();
         let (fg, pid) = win::foreground_of(&rects);
         if fg != win::Foreground::Other {
             return false;
