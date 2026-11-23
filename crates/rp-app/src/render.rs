@@ -86,7 +86,7 @@ impl App {
             player.init_gl(&loader)?;
             window.set_cursor_visible(false);
             let out = ScreenOut { screen, window, surface, player, target: None, slide: None, file_loaded: Cell::new(false) };
-            out.show(start_item.media(out.screen.slot).as_deref());
+            out.load(start_item.media(out.screen.slot).as_deref());
             outs.push(out);
         }
 
@@ -117,12 +117,12 @@ impl App {
             }
         }
         context.make_current(&outs[0].surface)?;
-        outs[0].window.focus_window();
         let now = Instant::now();
         let mut gfx = Gfx {
             pf_hwnd: hwnd_of(&outs[0].window),
             outs,
             context,
+            revealed: false,
             gl,
             _loader: loader,
             canvas,
@@ -359,6 +359,15 @@ impl App {
         g.canvas.restore();
         g.canvas.flush();
         pf.surface.swap_buffers(&g.context)?;
+        if !g.revealed {
+            // Every screen has a frame now: show them (secondaries only with media).
+            g.revealed = true;
+            let item = &self.lib.items[g.shown];
+            for o in &g.outs {
+                o.window.set_visible(o.screen.slot == Slot::PlayField || item.media(o.screen.slot).is_some());
+            }
+            g.outs[0].window.focus_window();
+        }
 
         if self.deadline.is_some_and(|d| Instant::now() >= d) {
             el.exit();

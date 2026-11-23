@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.25] - 2026-11-23
+
+### Fixed
+- No more white screens at startup. The windows used to appear before anything was drawn in them, so the backglass and FullDMD flashed white and a white box showed on the playfield while the players loaded. Now every window stays hidden until its first frame is drawn.
+
 ## [0.2.24] - 2026-11-23
 
 ### Fixed
