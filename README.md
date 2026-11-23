@@ -57,7 +57,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper.
 
-**Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. The **All games** wheel takes you back. Rusty Popper remembers the last playlist you used.
+**Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. Inside a playlist, the **All games** wheel takes you back; it sits one step back from the first game. Rusty Popper remembers the last playlist you used.
 
 **The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart computer* and *Shut down computer*. It always opens on *Back to games*, so a stray press can't power anything off.
 
