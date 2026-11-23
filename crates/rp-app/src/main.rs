@@ -357,6 +357,10 @@ fn run() -> Result<()> {
         last_reclaim: now,
         reclaim_until: now + Duration::from_secs(5),
         joy_blocked: false,
+        others: rp_launch::OtherLaunches::new(),
+        aside: None,
+        last_aside_check: now,
+        quiet_until: now,
     };
     MENU_UP.store(true, Ordering::Relaxed);
     MENU_RAN.store(true, Ordering::Relaxed);
@@ -402,6 +406,14 @@ fn restart_self() {
 }
 
 /// One cabinet screen: its window, GL surface and mpv player.
+/// The menu out of the way of a table another program started.
+struct Aside {
+    pid: u32,
+    name: String,
+    /// Which of our windows were showing, to restore them.
+    visible: Vec<bool>,
+}
+
 struct ScreenOut {
     screen: Screen,
     window: Window,
@@ -624,6 +636,13 @@ struct App {
     reclaim_until: Instant,
     /// Joystick input was being ignored (another program had the focus).
     joy_blocked: bool,
+    /// Spots tables started by other programs.
+    others: rp_launch::OtherLaunches,
+    /// Set while such a table is on screen and the menu has stepped aside.
+    aside: Option<Aside>,
+    last_aside_check: Instant,
+    /// No taking the focus back from the desktop before this.
+    quiet_until: Instant,
 }
 
 /// The file next to the exe that remembers the last playlist.

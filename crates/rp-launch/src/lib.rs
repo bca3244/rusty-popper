@@ -277,6 +277,44 @@ impl Matcher {
     }
 }
 
+/// Notices tables started by another program (VPin Studio's launcher or its
+/// media recorder, say), so the menu can step out of the way.
+pub struct OtherLaunches {
+    sys: Option<System>,
+}
+
+impl Default for OtherLaunches {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OtherLaunches {
+    pub fn new() -> Self {
+        OtherLaunches { sys: System::new().map_err(|e| log::warn!("can't list processes: {e}")).ok() }
+    }
+
+    /// The program name of process `pid` if it belongs to one of `emulators`
+    /// (found the same way as a game we start ourselves).
+    pub fn emulator_process(&mut self, pid: u32, emulators: &[Emulator], extra_ignored: &[String]) -> Option<String> {
+        let sys = self.sys.as_mut()?;
+        let p = Pid::from_u32(pid);
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[p]), true, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+        let proc = sys.process(p)?;
+        let exe = proc.exe().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = proc.name().to_string_lossy().into_owned();
+        emulators.iter().any(|e| Matcher::new(e, extra_ignored).matches(&exe, &name)).then_some(name)
+    }
+
+    /// Whether process `pid` is still running.
+    pub fn alive(&mut self, pid: u32) -> bool {
+        let Some(sys) = self.sys.as_mut() else { return false };
+        let p = Pid::from_u32(pid);
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[p]), true, ProcessRefreshKind::nothing());
+        sys.process(p).is_some()
+    }
+}
+
 /// Finds and follows the game's processes.
 struct Tracker {
     sys: Option<System>,

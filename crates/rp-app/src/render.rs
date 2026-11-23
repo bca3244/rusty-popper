@@ -150,6 +150,11 @@ impl App {
         if self.playing.is_some() {
             return self.frame_playing(el);
         }
+        if self.watch_other_launch() {
+            // Nothing to draw or listen to until that table closes.
+            el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250)));
+            return Ok(());
+        }
         el.set_control_flow(ControlFlow::Poll);
         self.poll_reload();
         self.check_db_changed();
