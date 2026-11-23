@@ -148,15 +148,23 @@ impl App {
 
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
+        vec![
+            format!("Wheel style: {}", if self.style == WheelStyle::Arc { "Arc" } else { "Cover flow" }),
+            "Attract mode \u{203a}".to_string(),
+            "Sound \u{203a}".to_string(),
+            self.update_label(),
+            "Back".to_string(),
+        ]
+    }
+
+    /// Labels for Options → Attract mode, with current values.
+    pub(crate) fn attract_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
         let mins = |s: u64| if s.checked_rem(60) == Some(0) { format!("{} min", s / 60) } else { format!("{s} s") };
         vec![
-            format!("Wheel style: {}", if self.style == WheelStyle::Arc { "Arc" } else { "Cover flow" }),
             format!("Attract mode: {}", onoff(self.attract.enabled)),
-            format!("Attract starts after: {}", mins(self.attract.idle_secs)),
+            format!("Starts after: {}", mins(self.attract.idle_secs)),
             format!("Time per game: {} s", self.attract.interval_secs),
-            "Sound \u{203a}".to_string(),
-            self.update_label(),
             "Back".to_string(),
         ]
     }
@@ -178,10 +186,7 @@ impl App {
     pub(crate) fn change_option(&mut self, row: usize) {
         match row {
             0 => self.style = self.style.toggled(),
-            1 => self.attract.enabled = !self.attract.enabled,
-            2 => self.attract.idle_secs = next_choice(ATTRACT_IDLE_CHOICES, self.attract.idle_secs),
-            3 => self.attract.interval_secs = next_choice(ATTRACT_INTERVAL_CHOICES, self.attract.interval_secs),
-            5 => {
+            3 => {
                 match self.updater.status() {
                     updater::Status::Available(rel) => self.updater.download(rel),
                     updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
@@ -189,6 +194,17 @@ impl App {
                 }
                 return;
             }
+            _ => return,
+        }
+        self.save_settings();
+    }
+
+    /// Cycles the value on Options → Attract mode row `row`, applies it, and saves it.
+    pub(crate) fn change_attract(&mut self, row: usize) {
+        match row {
+            0 => self.attract.enabled = !self.attract.enabled,
+            1 => self.attract.idle_secs = next_choice(ATTRACT_IDLE_CHOICES, self.attract.idle_secs),
+            2 => self.attract.interval_secs = next_choice(ATTRACT_INTERVAL_CHOICES, self.attract.interval_secs),
             _ => return,
         }
         self.save_settings();
@@ -269,6 +285,7 @@ impl App {
             let n = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.len(),
                 MenuKind::Options => OPTION_ROWS,
+                MenuKind::Attract => ATTRACT_ROWS,
                 MenuKind::Sound => SOUND_ROWS,
             };
             match action {
@@ -289,6 +306,18 @@ impl App {
                     self.sounds.play(sfx::Sfx::Select);
                     // Options rows change in place; the menu stays open.
                     match (kind, choice) {
+                        (MenuKind::Options, ATTRACT_ROW) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Attract, selected: 0, opened: Instant::now() });
+                            return;
+                        }
+                        (MenuKind::Attract, c) if c < ATTRACT_ROWS - 1 => {
+                            self.change_attract(c);
+                            return;
+                        }
+                        (MenuKind::Attract, _) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: ATTRACT_ROW, opened: Instant::now() });
+                            return;
+                        }
                         (MenuKind::Options, SOUND_ROW) => {
                             self.menu = Some(ExitMenu { kind: MenuKind::Sound, selected: 0, opened: Instant::now() });
                             return;

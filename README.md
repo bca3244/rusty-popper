@@ -66,8 +66,8 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 **Options** (Exit → Options) change things on the spot and save them:
 
 - Wheel style (arc or cover flow)
-- Attract mode on or off, how long until it starts, and how long it stays on each game
-- **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume (*Back* returns to Options)
+- **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
+- **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume (*Back* in either submenu returns to Options)
 - Install update / check for updates
 
 ## Updating
