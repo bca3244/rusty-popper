@@ -440,12 +440,17 @@ impl ScreenOut {
     /// its window (like Popper does) so it doesn't cover what's beneath it.
     /// Topper and DMD rectangles can overlap other screens on some cabinets.
     fn show(&self, media: Option<&Path>) {
+        self.load(media);
+        if self.screen.slot != Slot::PlayField {
+            self.window.set_visible(media.is_some());
+        }
+    }
+
+    /// Plays `media` without showing or hiding the window.
+    fn load(&self, media: Option<&Path>) {
         self.file_loaded.set(false);
         if let Err(e) = self.player.show(media) {
             log::warn!("{:?}: {e}", self.screen.slot);
-        }
-        if self.screen.slot != Slot::PlayField {
-            self.window.set_visible(media.is_some());
         }
     }
 
@@ -487,6 +492,8 @@ struct Gfx {
     gl: glow::Context,
     _loader: mpv::Loader,
     context: PossiblyCurrentContext,
+    /// Whether the windows have been shown (after the first frame).
+    revealed: bool,
 }
 
 impl Gfx {
@@ -688,6 +695,8 @@ fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
         .with_position(PhysicalPosition::new(s.x, s.y))
         .with_inner_size(PhysicalSize::new(s.width as u32, s.height as u32))
         .with_skip_taskbar(true)
+        // Shown after the first frame: an undrawn window shows up white.
+        .with_visible(false)
 }
 
 fn hwnd_of(window: &Window) -> isize {
