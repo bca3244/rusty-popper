@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.19] - 2026-11-23
+
+### Changed
+- When a table started by another program (VPin Studio's launcher or its media recorder) is on screen, Rusty Popper hides its windows and pauses its videos, so recordings of the backglass, FullDMD and playfield show the table and not the menu. It comes back when the table closes.
+
 ## [0.2.18] - 2026-11-23
 
 ### Changed
@@ -127,6 +132,7 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.19]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.19
 [0.2.18]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.18
 [0.2.17]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.17
 [0.2.16]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.16

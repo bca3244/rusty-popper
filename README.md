@@ -57,6 +57,8 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper.
 
+**Tables started elsewhere** (VPin Studio's launcher or its media recorder, for example): while the table is on screen, Rusty Popper hides its windows and pauses its videos, as if the menu had been closed, so recordings show the table rather than the menu. It comes back when the table closes. In VPin Studio's recorder, use the *Emulator* launch mode; the *Frontend* mode starts Popper's own menu.
+
 **Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. Inside a playlist, the **All games** wheel takes you back; it sits one step back from the first game. Rusty Popper remembers the last playlist you used.
 
 **The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart computer* and *Shut down computer*. It always opens on *Back to games*, so a stray press can't power anything off.

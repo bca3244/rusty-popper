@@ -125,7 +125,7 @@ impl App {
             return true;
         }
         let since = *self.unfocused_since.get_or_insert(now);
-        let reclaim = now < self.reclaim_until || (fg == win::Foreground::Shell && now - since >= Duration::from_secs(1));
+        let reclaim = now < self.reclaim_until || (fg == win::Foreground::Shell && now - since >= Duration::from_secs(1) && now >= self.quiet_until);
         if reclaim && now - self.last_reclaim >= Duration::from_millis(500) {
             self.last_reclaim = now;
             if let Some(g) = &self.gfx {
@@ -137,5 +137,79 @@ impl App {
         // it, not us. A small window in front (a notification, a dialog)
         // doesn't stop the buttons, or the cabinet would seem dead.
         fg != win::Foreground::Other || !self.joy_needs_focus
+    }
+
+    /// The emulators of the games on the wheel.
+    fn emulators(&self) -> Vec<rp_db::Emulator> {
+        let mut out: Vec<rp_db::Emulator> = Vec::new();
+        for it in &self.lib.items[..self.lib.game_count] {
+            if let Kind::Game { emu, .. } = &it.kind {
+                if !out.iter().any(|e| e.id == emu.id) {
+                    out.push((**emu).clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// While a table that another program started (VPin Studio's launcher
+    /// or its media recorder, say) is on screen, the menu hides its windows
+    /// and pauses its videos, as if Popper's menu had been closed: recordings
+    /// then show the table, not our videos. When that table closes, the menu
+    /// comes back. Returns whether the menu is stepped aside.
+    pub(crate) fn watch_other_launch(&mut self) -> bool {
+        let now = Instant::now();
+        if now - self.last_aside_check < Duration::from_millis(500) {
+            return self.aside.is_some();
+        }
+        self.last_aside_check = now;
+        let rects: Vec<(i32, i32, i32, i32)> = self.screens.iter().map(|s| (s.x, s.y, s.width, s.height)).collect();
+        if let Some(a) = &self.aside {
+            if self.others.alive(a.pid) {
+                return true;
+            }
+            // The window we followed (a backglass, say) closed, but another of
+            // the table's may still be up: follow that one instead.
+            let (fg, pid) = win::foreground_of(&rects);
+            if fg == win::Foreground::Other {
+                let emulators = self.emulators();
+                if let Some(name) = self.others.emulator_process(pid, &emulators, &self.ignore_processes) {
+                    self.aside = self.aside.take().map(|a| Aside { pid, name, ..a });
+                    return true;
+                }
+            }
+            let a = self.aside.take().expect("checked above");
+            log::info!("{} has closed: menu back", a.name);
+            if let Some(g) = self.gfx.as_mut() {
+                for (o, visible) in g.outs.iter().zip(&a.visible) {
+                    o.window.set_visible(*visible);
+                    let _ = o.player.set_pause(false);
+                }
+            }
+            self.last_input = now;
+            self.attract_on = false;
+            // Don't grab the focus straight back: VPin Studio's recorder may be
+            // about to start the next table, which needs to come to the front.
+            self.quiet_until = now + Duration::from_secs(6);
+            // Buttons held for the table don't count for the menu.
+            self.joy_blocked = true;
+            return false;
+        }
+        let (fg, pid) = win::foreground_of(&rects);
+        if fg != win::Foreground::Other {
+            return false;
+        }
+        let emulators = self.emulators();
+        let Some(name) = self.others.emulator_process(pid, &emulators, &self.ignore_processes) else { return false };
+        log::info!("{name} (started by another program) is on screen: menu steps aside");
+        self.close_card();
+        let Some(g) = self.gfx.as_mut() else { return false };
+        let visible = g.outs.iter().map(|o| o.window.is_visible() != Some(false)).collect();
+        for o in &g.outs {
+            let _ = o.player.set_pause(true);
+            o.window.set_visible(false);
+        }
+        self.aside = Some(Aside { pid, name, visible });
+        true
     }
 }
