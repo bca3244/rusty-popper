@@ -5,7 +5,9 @@ use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
-use windows_sys::Win32::UI::WindowsAndMessaging::{BringWindowToTop, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, SetForegroundWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow,
+};
 
 /// Who owns the foreground (keyboard focus) right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,27 @@ pub enum Foreground {
 /// Does a window rectangle cover the whole of screen `(x, y, w, h)`?
 fn covers(r: &RECT, (x, y, w, h): (i32, i32, i32, i32)) -> bool {
     r.left <= x && r.top <= y && r.right >= x + w && r.bottom >= y + h
+}
+
+/// Does a window rectangle cover nearly all (90% or more) of screen
+/// `(x, y, w, h)`? Forgives a game window a few pixels short or offset.
+fn mostly_covers(r: &RECT, (x, y, w, h): (i32, i32, i32, i32)) -> bool {
+    let iw = (r.right.min(x + w) - r.left.max(x)).max(0) as i64;
+    let ih = (r.bottom.min(y + h) - r.top.max(y)).max(0) as i64;
+    let area = w as i64 * h as i64;
+    area > 0 && iw * ih * 10 >= area * 9
+}
+
+/// Window classes of the Windows shell (desktop, taskbars).
+fn is_shell_class(class: &str) -> bool {
+    matches!(class, "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+}
+
+/// The class name of window `hwnd`.
+unsafe fn class_of(hwnd: HWND) -> String {
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) }.max(0) as usize;
+    String::from_utf16_lossy(&buf[..n.min(buf.len())])
 }
 
 /// Who has the foreground; `screens` are our screens as `(x, y, width, height)`.
@@ -49,11 +72,8 @@ unsafe fn classify(screens: &[(i32, i32, i32, i32)], pid: &mut u32) -> Foregroun
         if *pid == GetCurrentProcessId() {
             return Foreground::Ours;
         }
-        let mut buf = [0u16; 64];
-        let n = GetClassNameW(fg, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
-        match String::from_utf16_lossy(&buf[..n.min(buf.len())]).as_str() {
-            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" => return Foreground::Shell,
-            _ => {}
+        if is_shell_class(&class_of(fg)) {
+            return Foreground::Shell;
         }
         let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
         if GetWindowRect(fg, &mut r) != 0 && screens.iter().any(|s| covers(&r, *s)) {
@@ -61,6 +81,36 @@ unsafe fn classify(screens: &[(i32, i32, i32, i32)], pid: &mut u32) -> Foregroun
         } else {
             Foreground::Popup
         }
+    }
+}
+
+/// Another program's foreground window that is visible and covers (nearly)
+/// all of screen `(x, y, w, h)`: its process id and, for the log, its class,
+/// title and rectangle. `None` for our own windows, the shell, minimized or
+/// hidden windows, and anything much smaller than the screen.
+pub fn foreground_covering(screen: (i32, i32, i32, i32)) -> Option<(u32, String)> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_null() || IsWindowVisible(fg) == 0 || IsIconic(fg) != 0 {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, &mut pid);
+        if pid == GetCurrentProcessId() {
+            return None;
+        }
+        let class = class_of(fg);
+        if is_shell_class(&class) {
+            return None;
+        }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(fg, &mut r) == 0 || !mostly_covers(&r, screen) {
+            return None;
+        }
+        let mut title = [0u16; 128];
+        let n = GetWindowTextW(fg, title.as_mut_ptr(), title.len() as i32).max(0) as usize;
+        let title = String::from_utf16_lossy(&title[..n.min(title.len())]);
+        Some((pid, format!("{class} \"{title}\" at {},{} {}x{}", r.left, r.top, r.right - r.left, r.bottom - r.top)))
     }
 }
 

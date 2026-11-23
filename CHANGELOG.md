@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.24] - 2026-11-23
+
+### Fixed
+- The playfield's **Launching** screen no longer switches to **Exiting** while a table is still loading. It used to count the table as up as soon as any of the table's windows (a B2S backglass or a DMD window, say) filled one of the screens; now only a window covering the playfield does. If none is seen, it waits up to two minutes instead of one. The log names the window it took for the table.
+
 ## [0.2.23] - 2026-11-23
 
 ### Changed

@@ -34,8 +34,9 @@ impl App {
         let mut phase = p.ctl.phase();
         // The emulator's process shows up long before the table does. Until
         // a window of the game covers one of our screens, this is still
-        // "Launching". (Other programs' windows don't count: VPin Studio's
-        // overlay, say, takes the focus for a moment at every launch.)
+        // "Launching": the other screens keep their media. (Other programs'
+        // windows don't count: VPin Studio's overlay, say, takes the focus for
+        // a moment at every launch.)
         if phase == Phase::Playing && !p.game_up {
             let seen = *p.process_since.get_or_insert_with(Instant::now);
             let rects: Vec<(i32, i32, i32, i32)> = self.screens.iter().map(|s| (s.x, s.y, s.width, s.height)).collect();
@@ -49,6 +50,25 @@ impl App {
                 phase = Phase::Launching;
             }
         }
+        // The playfield keeps saying "Launching" until the game's window
+        // covers the playfield itself. While a table loads, its backglass or
+        // DMD window (B2S, PinMAME, FlexDMD; often inside the emulator's own
+        // process) can fill the backglass or DMD screen and take the focus
+        // well before the table is drawn.
+        if phase == Phase::Playing && !p.table_up {
+            let seen = p.process_since.unwrap_or(p.since);
+            let pf = self.screens.iter().find(|s| s.slot == Slot::PlayField).map(|s| (s.x, s.y, s.width, s.height));
+            let pids = p.ctl.game_pids();
+            let table_window = pf.and_then(win::foreground_covering).filter(|(pid, _)| pids.is_empty() || pids.contains(pid));
+            if let Some((_, window)) = &table_window {
+                log::info!("Table on the playfield after {:.1}s ({window})", p.since.elapsed().as_secs_f32());
+                p.table_up = true;
+            } else if seen.elapsed() >= TABLE_UP_TIMEOUT {
+                log::info!("Table counted as on the playfield after {:.1}s (no game window seen there)", p.since.elapsed().as_secs_f32());
+                p.table_up = true;
+            }
+        }
+        let launching = phase == Phase::Launching || (phase == Phase::Playing && !p.table_up);
         if let Some(g) = self.gfx.as_mut() {
             // Popper's "Exit Emulators" button closes the game, whichever
             // window has the focus (ignored for a moment after Start).
@@ -90,7 +110,7 @@ impl App {
         }
         p.last_render = Some(Instant::now());
         let index = p.index;
-        self.render_launching(index, phase, t)
+        self.render_launching(index, phase, launching, t)
     }
 
     /// Shows the launch screen and runs the selected game's emulator scripts
@@ -151,6 +171,7 @@ impl App {
             since: Instant::now(),
             process_since: None,
             game_up: false,
+            table_up: false,
             exiting_since: None,
             others_paused: false,
             kept_video,
@@ -200,7 +221,9 @@ impl App {
 
     /// One frame while a game is loading, running or closing: the launch /
     /// exit screen on the playfield and the game's media (or black) elsewhere.
-    pub(crate) fn render_launching(&mut self, index: usize, phase: rp_launch::Phase, t: f32) -> Result<()> {
+    /// `launching` picks the playfield's text: "Launching" until the table
+    /// is on the playfield, "Exiting" after.
+    pub(crate) fn render_launching(&mut self, index: usize, phase: rp_launch::Phase, launching: bool, t: f32) -> Result<()> {
         let ui_rotation = self.ui_rotation();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
         let item = &self.lib.items[index];
@@ -229,10 +252,10 @@ impl App {
         g.canvas.set_size(w as u32, h as u32, 1.0);
         g.canvas.save();
         let (lw, lh) = face_player(&mut g.canvas, w, h, (pf.screen.rotation + ui_rotation).rem_euclid(360));
-        // Once the game is on screen, the screen behind it already reads
-        // "Exiting", so that's what shows the moment the table closes (not a
-        // stale "Launching").
-        let verb = if phase == rp_launch::Phase::Launching { "Launching" } else { "Exiting" };
+        // Once the table is on the playfield, the screen behind it already
+        // reads "Exiting", so that's what shows the moment the table closes
+        // (not a stale "Launching").
+        let verb = if launching { "Launching" } else { "Exiting" };
         wheel::draw_launch(&mut g.canvas, lw, lh, &g.entries[index], verb, item.emu_name(), t, &g.fonts);
         g.canvas.restore();
         g.canvas.flush();
