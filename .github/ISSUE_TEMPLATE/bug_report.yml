@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in Rusty Popper doesn't work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem! The more of this you can fill in, the quicker it can be fixed.
+        Please check the [Troubleshooting](https://github.com/bca3244/rusty-popper#troubleshooting) section of the README first.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What went wrong, and what you expected instead. Include the text of any error screen.
+      placeholder: When I press Start on a playlist wheel, the menu goes black for a few seconds and then...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, step by step, so it can be made to happen again.
+      placeholder: |
+        1. Open the exit menu
+        2. Go to Options
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Rusty Popper version
+      description: Shown in Exit → Options on the update row, or in rusty-popper.exe → Properties → Details.
+      placeholder: "0.2.18"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Starting up
+        - Wheel / browsing
+        - Videos or screens
+        - Launching or exiting a game
+        - Buttons / controls
+        - Playlists
+        - Info / Help cards
+        - Sounds
+        - Options / settings
+        - Updating
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Cabinet setup
+      description: Windows version, PinUP Popper version, which screens you use (playfield, backglass, DMD, FullDMD, topper) and how the playfield is turned, and the emulators involved (VPX, Future Pinball, ...).
+      placeholder: Windows 11, Popper 1.5, 4K playfield turned 270°, backglass + FullDMD, VPX 10.8
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: rusty-popper.log
+      description: |
+        The log is next to rusty-popper.exe. Paste the part around the problem, or drag the whole file here.
+        It contains folder paths and game names from your setup; remove anything you'd rather not share.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, photos of the screen, or your rusty-popper.toml if you changed settings.
+    validations:
+      required: false

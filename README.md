@@ -32,7 +32,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
    - `Enable-RustyPopperStartup.ps1` and `Disable-RustyPopperStartup.ps1`, for starting at boot
 3. **Close Popper** if it's running, then **run `rusty-popper.exe`** to try it.
    - It finds Popper by itself: the default `C:\vPinball\PinUPSystem` first, then where Windows has PinUpPlayer registered, then the usual install folders on every drive. If it had to search, the folder it found is saved to `rusty-popper.toml` so the next start goes straight there.
-   - If it can't start (Popper not found, `libmpv-2.dll` missing), it shows a message saying why. More detail is in `rusty-popper.log` next to the exe.
+   - If it can't start (Popper not found, `libmpv-2.dll` missing), it shows an error screen on the playfield saying why (any button closes it). More detail is in `rusty-popper.log` next to the exe.
 4. **Start it at boot (optional).** Right-click `Enable-RustyPopperStartup.ps1` and choose *Run with PowerShell*. It asks for administrator rights. It creates a "Run Rusty Popper" logon task and disables Popper's own "Run Pinup Popper" task, so only one front end starts.
 
 ### Going back to Popper
@@ -106,18 +106,20 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 - **Next to the exe:**
   - `rusty-popper.log`, for troubleshooting
   - `rusty-popper.toml`, when you change Options
-  - `last-playlist.txt`
+  - `last-playlist.txt`, and `last-screen.txt` (where to show an error screen)
   - `update\` while an update downloads (removed once the new version is confirmed), and `rollback\`, which holds the previous version
 
 Nothing else of Popper's is changed. Rusty Popper notices when the database changes (tables added in Popper's setup or VPin Studio, playlists edited) and picks the changes up without a restart.
 
 ## Troubleshooting
 
-- **Nothing happens, or a message says it couldn't start:** read `rusty-popper.log` next to the exe. The usual causes are:
+- **Nothing happens, or an error screen says it couldn't start:** read `rusty-popper.log` next to the exe. The usual causes are:
   - Popper isn't installed where it looked: set `popper_dir` under `[paths]`.
   - `libmpv-2.dll` isn't next to the exe.
 - **A game launches but Rusty Popper doesn't come back:** a helper program from the emulator's folder may still be running. Add it to `ignore_processes` under `[launch]`.
 - **Buttons do the wrong thing:** they come from Popper's controller setup, so fix them there (PinUP Popper Setup → Controller Setup).
+
+Still stuck? [Report a bug](https://github.com/bca3244/rusty-popper/issues/new?template=bug_report.yml) with your `rusty-popper.log`. What changed in each version is in the [changelog](CHANGELOG.md).
 
 ## Building from source
 

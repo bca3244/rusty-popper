@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README and troubleshooting
+    url: https://github.com/bca3244/rusty-popper#troubleshooting
+    about: Installation, controls, settings, and fixes for common problems.
