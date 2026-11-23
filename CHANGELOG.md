@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.20] - 2026-11-23
+
+### Added
+- **Game audio:** when the wheel rests on a game for about a second, its Popper Audio media (`POPMedia\<emulator>\Audio\<game>.mp3`, or .ogg, .wav, .m4a and the like) plays on a loop. It stops on the next move, when a game launches and during attract mode, so fast scrolling stays quiet. It can be turned off, and its volume set, in Options (`game_audio` and `game_audio_volume` under `[sound]`).
+
 ## [0.2.19] - 2026-11-23
 
 ### Changed
@@ -132,6 +137,7 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.20]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.20
 [0.2.19]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.19
 [0.2.18]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.18
 [0.2.17]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.17
