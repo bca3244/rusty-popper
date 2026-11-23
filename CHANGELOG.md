@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.23] - 2026-11-23
+
+### Changed
+- The attract mode settings (on/off, starts after, time per game) moved into an **Options → Attract mode** submenu, like Sound. Options is now five rows: Wheel style, Attract mode, Sound, Update, Back.
+
 ## [0.2.22] - 2026-11-23
 
 ### Changed
@@ -147,6 +152,7 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.23]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.23
 [0.2.22]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.22
 [0.2.21]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.21
 [0.2.20]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.20

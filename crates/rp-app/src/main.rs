@@ -524,9 +524,11 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 7; // style, attract, idle, interval, sound (submenu), update, back
-/// The Options row that opens the Sound submenu.
-const SOUND_ROW: usize = 4;
+const OPTION_ROWS: usize = 5; // style, attract (submenu), sound (submenu), update, back
+/// The Options rows that open the Attract mode and Sound submenus.
+const ATTRACT_ROW: usize = 1;
+const SOUND_ROW: usize = 2;
+const ATTRACT_ROWS: usize = 4; // on/off, starts after, time per game, back
 const SOUND_ROWS: usize = 6; // video volume, effects, effects volume, game audio, game audio volume, back
 
 fn next_choice(choices: &[u64], cur: u64) -> u64 {
@@ -560,6 +562,8 @@ struct Playing {
 enum MenuKind {
     Exit,
     Options,
+    /// Options → Attract mode: on/off and its timings.
+    Attract,
     /// Options → Sound: every volume and sound setting.
     Sound,
 }
