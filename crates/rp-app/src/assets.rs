@@ -63,12 +63,14 @@ pub fn spawn_loader(paths: Vec<Option<PathBuf>>, near: usize) -> Loader {
     let stop = Arc::new(AtomicBool::new(false));
     let claimed: Arc<Vec<AtomicBool>> = Arc::new(paths.iter().map(|p| AtomicBool::new(p.is_none())).collect());
     let paths = Arc::new(paths);
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1)).clamp(1, 3);
+    // Few threads, at low priority, so the decoders and the menu come first.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).clamp(1, 2);
     let started = Instant::now();
     let remaining = Arc::new(AtomicUsize::new(threads));
     for t in 0..threads {
         let (tx, near, stop, claimed, paths, remaining) = (tx.clone(), near.clone(), stop.clone(), claimed.clone(), paths.clone(), remaining.clone());
         let spawned = std::thread::Builder::new().name(format!("logo-loader-{t}")).spawn(move || {
+            lower_priority();
             while let Some(i) = claim_nearest(&claimed, near.load(Ordering::Relaxed)) {
                 if stop.load(Ordering::Relaxed) {
                     return;
@@ -96,6 +98,15 @@ pub fn spawn_loader(paths: Vec<Option<PathBuf>>, near: usize) -> Loader {
     }
     Loader { rx, near, stop }
 }
+
+#[cfg(windows)]
+fn lower_priority() {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+}
+
+#[cfg(not(windows))]
+fn lower_priority() {}
 
 /// Claims the unclaimed index closest to `near` (around the wheel's wrap).
 fn claim_nearest(claimed: &[AtomicBool], near: usize) -> Option<usize> {

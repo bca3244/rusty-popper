@@ -17,7 +17,8 @@ const FLOW_TURN: f32 = 0.85;
 /// Delay after the selection settles before media on the screens is swapped.
 pub const MEDIA_DEBOUNCE: f32 = 0.16;
 /// How quickly the drawn wheel catches up with the selection (per second).
-/// Stiff enough that during fast scrolling it trails by under half a game.
+/// It stiffens further the further behind it is (see `update`), so fast
+/// held scrolling stays within about a game of the selection.
 const SPRING: f32 = 18.0;
 const INFO_FADE: f32 = 0.35;
 
@@ -85,7 +86,8 @@ impl Wheel {
 
     /// Advances the animation. Returns true when the selection changed.
     pub fn update(&mut self, dt: f32, now: f64) -> bool {
-        let k = 1.0 - (-dt * SPRING).exp();
+        let behind = ((self.target as f32 - self.pos).abs() - 1.0).clamp(0.0, 3.0);
+        let k = 1.0 - (-dt * SPRING * (1.0 + 0.5 * behind)).exp();
         self.pos += (self.target as f32 - self.pos) * k;
         if (self.target as f32 - self.pos).abs() < 0.0005 {
             self.pos = self.target as f32;

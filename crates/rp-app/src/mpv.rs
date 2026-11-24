@@ -51,6 +51,8 @@ const RENDER_PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 const RENDER_UPDATE_FRAME: u64 = 1;
 
 pub const EVENT_SHUTDOWN: i32 = 1;
+/// The reply to a `command_async`, carrying its tag.
+pub const EVENT_COMMAND_REPLY: i32 = 5;
 /// A newly loaded file is open (its first frame follows with PLAYBACK_RESTART).
 pub const EVENT_FILE_LOADED: i32 = 8;
 /// Playback (re)started after loading or seeking: the new file has frames.
@@ -120,14 +122,14 @@ impl Mpv {
         if h.is_null() {
             bail!("mpv_create failed");
         }
-        let p = Player { api: self.clone(), h, render: std::ptr::null_mut() };
+        let p = Player { api: self.clone(), h, render: std::ptr::null_mut(), last_tag: std::cell::Cell::new(0) };
         p.set_option("vo", "libmpv")?;
         for (k, v) in options {
             p.set_option(k, v)?;
         }
         for (k, v) in optional {
             if let Err(e) = p.set_option(k, v) {
-                log::debug!("{e:#}");
+                log::info!("Skipping {e:#}");
             }
         }
         let rc = unsafe { (self.0.initialize)(h) };
@@ -155,6 +157,8 @@ pub struct Player {
     api: Mpv,
     h: *mut MpvHandle,
     render: *mut RenderCtx,
+    /// The tag given to the last `show`, so its reply can be recognised.
+    last_tag: std::cell::Cell<u64>,
 }
 
 impl Player {
@@ -250,10 +254,15 @@ impl Player {
     /// Queues a command without waiting for mpv's core thread to process it.
     /// Failures arrive later as events.
     pub fn command_async(&self, args: &[&str]) -> Result<()> {
+        self.command_tagged(0, args)
+    }
+
+    /// `command_async` whose reply event carries `tag`.
+    fn command_tagged(&self, tag: u64, args: &[&str]) -> Result<()> {
         let owned: Vec<CString> = args.iter().map(|a| CString::new(*a)).collect::<Result<_, _>>()?;
         let mut ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
         ptrs.push(std::ptr::null());
-        let rc = unsafe { (self.api.0.command_async)(self.h, 0, ptrs.as_ptr()) };
+        let rc = unsafe { (self.api.0.command_async)(self.h, tag, ptrs.as_ptr()) };
         if rc < 0 {
             bail!("mpv command {args:?}: {}", self.api.err(rc));
         }
@@ -264,23 +273,28 @@ impl Player {
         self.command(&["set", "pause", if paused { "yes" } else { "no" }])
     }
 
-    /// Loads a file in a loop, or stops (black) when there is none.
-    pub fn show(&self, media: Option<&Path>) -> Result<()> {
+    /// Loads a file in a loop, or stops (black) when there is none, without
+    /// waiting. Returns the tag its `EVENT_COMMAND_REPLY` will carry: events
+    /// before that reply still belong to the previous file.
+    pub fn show(&self, media: Option<&Path>) -> Result<u64> {
+        let tag = self.last_tag.get() + 1;
+        self.last_tag.set(tag);
         match media {
-            Some(m) => self.command_async(&["loadfile", &m.to_string_lossy()]),
-            None => self.command_async(&["stop"]),
+            Some(m) => self.command_tagged(tag, &["loadfile", &m.to_string_lossy()])?,
+            None => self.command_tagged(tag, &["stop"])?,
         }
+        Ok(tag)
     }
 
-    /// Drains pending events without blocking; returns the ids seen.
-    pub fn poll_events(&self) -> Vec<i32> {
+    /// Drains pending events without blocking; returns (event id, reply tag) pairs.
+    pub fn poll_events(&self) -> Vec<(i32, u64)> {
         let mut ids = Vec::new();
         loop {
             let ev = unsafe { &*(self.api.0.wait_event)(self.h, 0.0) };
             if ev.event_id == 0 {
                 break;
             }
-            ids.push(ev.event_id);
+            ids.push((ev.event_id, ev.reply_userdata));
             if ev.event_id == EVENT_SHUTDOWN {
                 break;
             }

@@ -127,6 +127,8 @@ impl App {
             return;
         }
         let Some(g) = self.gfx.as_mut() else { return };
+        // Keys held now are the game's from here on.
+        self.key_repeat.clear();
         // The table's own DOF needs the hardware: end ours (as Popper does).
         self.dof.suspend(true);
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: (**emu).clone(), game: (**game).clone(), ignore: self.ignore_processes.clone() };
@@ -228,6 +230,7 @@ impl App {
         self.last_reclaim = now;
         // Buttons still held from the game (e.g. Exit) must not fire in the menu.
         g.joysticks.swallow_held(&self.bindings);
+        self.key_repeat.clear();
         self.joy_blocked = false;
         g.last = now;
     }

@@ -452,10 +452,16 @@ struct ScreenOut {
     /// Whether the file asked for by the last `show` has been opened. Until
     /// then a "playback restarted" event still belongs to the previous video.
     file_loaded: Cell<bool>,
+    /// Tag of the last `show`, and whether mpv has replied to it yet: until
+    /// it has, a "file loaded" event is still the previous file's.
+    load_tag: Cell<u64>,
+    load_acked: Cell<bool>,
     /// When the last `show` was asked for, to log how long the switch took.
     loaded_at: Cell<Option<Instant>>,
     /// Whether the decoder mpv picked has been logged yet.
     hwdec_logged: Cell<bool>,
+    /// Whether the file asked for by the last `show` is a video.
+    wants_video: Cell<bool>,
     /// Must be redrawn even without a new video frame (new file, shown again,
     /// a card just closed). Secondary screens skip frames with nothing new.
     dirty: Cell<bool>,
@@ -479,20 +485,27 @@ impl ScreenOut {
     /// Plays `media` without showing or hiding the window.
     fn load(&self, media: Option<&Path>) {
         self.file_loaded.set(false);
+        self.load_acked.set(false);
         self.dirty.set(true);
         self.loaded_at.set(media.map(|_| Instant::now()));
-        if let Err(e) = self.player.show(media) {
-            log::warn!("{:?}: {e}", self.screen.slot);
+        self.wants_video.set(media.is_some_and(is_video));
+        match self.player.show(media) {
+            Ok(tag) => self.load_tag.set(tag),
+            Err(e) => {
+                log::warn!("{:?}: {e}", self.screen.slot);
+                self.load_acked.set(true);
+            }
         }
     }
 
     /// Drains the player's events. Returns true if mpv is shutting down.
     fn pump_events(&mut self) -> bool {
         let mut shutdown = false;
-        for ev in self.player.poll_events() {
+        for (ev, tag) in self.player.poll_events() {
             match ev {
                 mpv::EVENT_SHUTDOWN => shutdown = true,
-                mpv::EVENT_FILE_LOADED => self.file_loaded.set(true),
+                mpv::EVENT_COMMAND_REPLY if tag != 0 && tag == self.load_tag.get() => self.load_acked.set(true),
+                mpv::EVENT_FILE_LOADED if self.load_acked.get() => self.file_loaded.set(true),
                 mpv::EVENT_PLAYBACK_RESTART if self.file_loaded.get() => {
                     if let Some(s) = self.slide.as_mut() {
                         s.video_ready();
@@ -503,7 +516,8 @@ impl ScreenOut {
                             log::info!("perf: {:?} media took {ms} ms to start", self.screen.slot);
                         }
                     }
-                    if !self.hwdec_logged.replace(true) {
+                    // Logged for the first video (a still image says nothing).
+                    if self.wants_video.get() && !self.hwdec_logged.replace(true) {
                         let dec = self.player.get_string("hwdec-current").unwrap_or_else(|| "?".into());
                         log::info!("{:?}: video decoder hwdec={dec}", self.screen.slot);
                     }

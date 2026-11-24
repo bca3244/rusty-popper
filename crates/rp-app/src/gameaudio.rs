@@ -65,7 +65,7 @@ impl GameAudio {
         self.tried = true;
         if let (Some(p), Some(file)) = (&self.player, audio_of(item)) {
             match p.show(Some(&file)) {
-                Ok(()) => self.playing = true,
+                Ok(_) => self.playing = true,
                 Err(e) => log::warn!("Game audio {}: {e:#}", file.display()),
             }
         }

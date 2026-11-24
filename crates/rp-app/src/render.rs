@@ -96,6 +96,9 @@ impl App {
                 target: None,
                 slide: None,
                 file_loaded: Cell::new(false),
+                load_tag: Cell::new(0),
+                load_acked: Cell::new(false),
+                wants_video: Cell::new(false),
                 loaded_at: Cell::new(None),
                 hwdec_logged: Cell::new(false),
                 dirty: Cell::new(true),
@@ -316,8 +319,10 @@ impl App {
         g.perf.part("media swap");
 
         // Which screens need presenting this frame. The playfield always does
-        // (the wheel moves); a secondary screen only when its video has a new
-        // frame or something on it changed, with a redraw every second anyway.
+        // (the wheel moves) and its video is drawn every frame; a secondary
+        // screen only when its video has a new frame or something on it
+        // changed, with a redraw every second anyway.
+        video::reset_for_mpv(&g.gl);
         let card_out = self.card.as_ref().map(|c| c.out);
         let present: Vec<(bool, bool)> = g
             .outs
