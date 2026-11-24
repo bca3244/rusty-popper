@@ -12,8 +12,6 @@ use std::time::Instant;
 
 /// How long a slide takes.
 pub const SLIDE_SECS: f32 = 0.45;
-/// If the new video hasn't produced a frame by then, slide anyway.
-const WAIT_LIMIT_SECS: f32 = 0.8;
 
 pub struct Target {
     pub live: ImageId,
@@ -27,8 +25,9 @@ pub struct Target {
 pub struct Slide {
     /// +1: new video comes in from the player's right (moving to the next game).
     dir: f32,
-    requested: Instant,
-    started: Option<Instant>,
+    started: Instant,
+    /// The new video has produced a frame (until then its side stays black).
+    ready: bool,
 }
 
 fn fbo_for(gl: &glow::Context, canvas: &Canvas<OpenGl>, img: ImageId) -> Result<glow::NativeFramebuffer> {
@@ -80,29 +79,20 @@ impl Target {
 }
 
 impl Slide {
+    /// Starts moving at once, in step with the wheel.
     pub fn new(dir: i64) -> Self {
-        Slide { dir: if dir < 0 { -1.0 } else { 1.0 }, requested: Instant::now(), started: None }
+        Slide { dir: if dir < 0 { -1.0 } else { 1.0 }, started: Instant::now(), ready: false }
     }
 
-    /// The new video has its first frame: start moving.
+    /// The new video has its first frame: show it.
     pub fn video_ready(&mut self) {
-        if self.started.is_none() {
-            self.started = Some(Instant::now());
-        }
+        self.ready = true;
     }
 
-    /// Progress 0..1 (0 while waiting for the new video). None when finished.
-    fn progress(&mut self) -> Option<f32> {
-        if self.started.is_none() && self.requested.elapsed().as_secs_f32() > WAIT_LIMIT_SECS {
-            self.started = Some(Instant::now());
-        }
-        match self.started {
-            None => Some(0.0),
-            Some(t) => {
-                let p = t.elapsed().as_secs_f32() / SLIDE_SECS;
-                (p < 1.0).then_some(p)
-            }
-        }
+    /// Progress 0..1. None when finished.
+    fn progress(&self) -> Option<f32> {
+        let p = self.started.elapsed().as_secs_f32() / SLIDE_SECS;
+        (p < 1.0).then_some(p)
     }
 }
 
@@ -155,7 +145,7 @@ pub fn composite(canvas: &mut Canvas<OpenGl>, t: &Target, slide: &mut Option<Sli
     let inn = s.dir * (1.0 - e) * dist;
     canvas.save();
     draw_image(canvas, t.snap, axis.0 * out, axis.1 * out, w, h);
-    if s.started.is_some() {
+    if s.ready {
         draw_image(canvas, t.live, axis.0 * inn, axis.1 * inn, w, h);
     }
     canvas.restore();

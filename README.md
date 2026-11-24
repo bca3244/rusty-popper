@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 
 ## Features
 
-- **Two wheel styles:** an arc wheel and a cover flow with sliding videos. Switch in Options.
+- **Four wheel styles:** an arc wheel, a cover flow with sliding videos, minimal (one big logo with its neighbours peeking in at the edges) and vertical (a list of large logos down the right edge). Switch in Options.
 - **Every cabinet screen:** playfield, backglass, DMD, FullDMD and topper all follow the selected game, using Popper's own screen layout and playfield rotation.
 - **Launches through Popper's scripts:** VPX, Future Pinball and others start exactly as they do in Popper. "Launching" and "Exiting" screens mean the desktop never shows.
 - **Playlists as wheels:** Popper's playlists sit on the wheel where it wraps from the last game back to the first.
@@ -54,7 +54,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 | Game Help | | H | Show the game's help card |
 | System Menu / Exit Emulators | Exit | Esc | Open the exit menu |
 | List Next / List Prior | | P | Jump to the playlist wheels |
-| | | W | Switch between arc and cover flow |
+| | | W | Switch wheel style (arc, cover flow, minimal, vertical) |
 | | | Q | Quit at once (can be turned off) |
 
 **While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper.
@@ -67,7 +67,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **Options** (Exit → Options) change things on the spot and save them. A fresh install starts with the arc wheel, attract mode after 3 minutes idle (12 seconds per game), video volume 50, sound effects 30 and game audio 50.
 
-- Wheel style (arc or cover flow)
+- Wheel style (arc, cover flow, minimal or vertical)
 - **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume. Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
@@ -96,7 +96,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 
 | Section | What's in it |
 |---|---|
-| `[wheel]` | `style`: `"arc"` or `"flow"` |
+| `[wheel]` | `style`: `"arc"`, `"flow"`, `"minimal"` or `"vertical"` |
 | `[playfield]` | `ui_rotation`: turn the menu to face the player (default: Popper's own setting) |
 | `[input]` | Extra joystick buttons, whether buttons need focus, the Q quit key |
 | `[launch]` | Extra helper programs to ignore when deciding whether a game is still running |
@@ -170,7 +170,7 @@ crates/
     session.rs    a game session: launch, the Launching/Exiting screens, the exit button
     reload.rs     following database changes, keeping the keyboard focus
     library.rs    games and playlists as read from Popper
-    wheel.rs      the arc wheel and cover flow
+    wheel.rs      the wheel styles: arc, cover flow, minimal and vertical
     video.rs      offscreen video targets and the cover-flow slide
     mpv.rs        minimal libmpv binding, loaded at run time
     assets.rs     background loading of wheel logos

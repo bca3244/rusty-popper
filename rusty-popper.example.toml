@@ -2,7 +2,7 @@
 # Most of these can also be changed in the app: Exit -> Options.
 
 [wheel]
-style = "arc"          # "arc" or "flow"; W toggles at runtime
+style = "arc"          # "arc", "flow", "minimal" or "vertical"; W cycles at runtime
 
 [playfield]
 # Degrees clockwise to turn the menu so it faces the player.

@@ -1,4 +1,4 @@
-//! Game wheel state and drawing (arc wheel and cover flow), drawn with
+//! Game wheel state and drawing (arc, cover flow, minimal and vertical), drawn with
 //! femtovg over the playfield video. Layout numbers are in a 1080-px-tall
 //! design space (matching the Wheel Style Lab mockup) and scaled to the screen.
 
@@ -16,8 +16,6 @@ const FLOW_STEP: f32 = 270.0;
 const FLOW_TURN: f32 = 0.85;
 /// Delay after the selection settles before media on the screens is swapped.
 pub const MEDIA_DEBOUNCE: f32 = 0.16;
-/// Fade-in time of the new playfield video after a swap.
-pub const MEDIA_FADE: f32 = 0.45;
 const SPRING: f32 = 11.0;
 const INFO_FADE: f32 = 0.35;
 
@@ -49,6 +47,8 @@ pub struct Wheel {
     last_sel: usize,
     /// Seconds since start (f64: an f32 loses the fractions after days of uptime).
     pub changed_at: f64,
+    /// Seconds between the last selection change and the one before it.
+    pub gap: f64,
     /// Direction of the last step (+1 next, -1 previous), for slide transitions.
     pub last_dir: i64,
 }
@@ -65,7 +65,7 @@ fn ease_out(t: f32) -> f32 {
 
 impl Wheel {
     pub fn new(n: usize, start: usize) -> Self {
-        Wheel { target: start as i64, pos: start as f32, n: n.max(1) as i64, info_t: 1.0, last_sel: start, changed_at: 0.0, last_dir: 1 }
+        Wheel { target: start as i64, pos: start as f32, n: n.max(1) as i64, info_t: 1.0, last_sel: start, changed_at: 0.0, gap: f64::INFINITY, last_dir: 1 }
     }
 
     pub fn selected(&self) -> usize {
@@ -93,6 +93,7 @@ impl Wheel {
         if s != self.last_sel {
             self.last_sel = s;
             self.info_t = 0.0;
+            self.gap = now - self.changed_at;
             self.changed_at = now;
             return true;
         }
@@ -110,8 +111,6 @@ pub struct Frame<'a> {
     /// Current playlist name, shown above the counter.
     pub playlist: &'a str,
     pub fonts: &'a Fonts,
-    /// 0 = black, 1 = video fully visible (fade after a media swap).
-    pub video_fade: f32,
     /// Letter jump indicator: the letter and seconds since the jump.
     pub letter: Option<(char, f32)>,
     /// "Update v… available" note, shown small in the corner.
@@ -137,21 +136,29 @@ pub fn draw(cv: &mut Cv, w: f32, h: f32, f: &Frame) {
     cv.save();
     cv.scale(s, s);
 
-    if f.video_fade < 1.0 {
-        fill_rect(cv, 0.0, 0.0, vw, dh, Color::rgbaf(0.0, 0.0, 0.0, 1.0 - ease_out(f.video_fade)));
-    }
     // Darken the top for the info text and the bottom behind the wheel.
     let mut p = Path::new();
     p.rect(0.0, 0.0, vw, 450.0);
     cv.fill_path(&p, &Paint::linear_gradient(0.0, 0.0, 0.0, 450.0, Color::rgbaf(0.012, 0.016, 0.03, 0.7), Color::rgbaf(0.012, 0.016, 0.03, 0.0)));
     let mut p = Path::new();
-    p.rect(0.0, dh - 430.0, vw, 430.0);
-    cv.fill_path(&p, &Paint::linear_gradient(0.0, dh - 430.0, 0.0, dh, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, 0.6)));
+    if f.style == WheelStyle::Vertical {
+        // Vertical shades the right side behind its logo column instead.
+        let gw = vertical_col_w(vw) + 260.0;
+        p.rect(vw - gw, 0.0, gw, dh);
+        cv.fill_path(&p, &Paint::linear_gradient(vw - gw, 0.0, vw, 0.0, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, 0.6)));
+    } else {
+        // Minimal keeps more of the video clear: a shorter, lighter shade.
+        let (bh, ba) = if f.style == WheelStyle::Minimal { (320.0, 0.45) } else { (430.0, 0.6) };
+        p.rect(0.0, dh - bh, vw, bh);
+        cv.fill_path(&p, &Paint::linear_gradient(0.0, dh - bh, 0.0, dh, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, ba)));
+    }
 
     if !f.order.is_empty() {
         match f.style {
             WheelStyle::Arc => draw_arc(cv, vw, dh, f),
             WheelStyle::Flow => draw_flow(cv, vw, dh, f),
+            WheelStyle::Minimal => draw_minimal(cv, vw, dh, f),
+            WheelStyle::Vertical => draw_vertical(cv, vw, dh, f),
         }
         draw_info(cv, vw, f);
     } else {
@@ -375,6 +382,87 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
     }
 }
 
+/// One big logo near the bottom, with its neighbours peeking in, half cut
+/// off, at the screen edges. Media swaps work as in the arc wheel.
+fn draw_minimal(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
+    let (cx, y) = (vw / 2.0, dh - 190.0);
+    // A neighbour's centre sits just inside the screen edge.
+    let spacing = vw / 2.0 - 70.0;
+    for (i, d) in visible_items(f.wheel.pos, f.order.len(), 1.6) {
+        let e = f.entry(i);
+        let a = d.abs().min(1.0);
+        let sc = 1.0 - 0.45 * a;
+        let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
+        let (w, h) = fit(aspect, 460.0 * sc, 260.0 * sc);
+        let alpha = (1.0 - 0.7 * a) * clamp(1.6 - d.abs(), 0.0, 1.0);
+        cv.save();
+        cv.translate(cx + d * spacing, y);
+        draw_logo(cv, e, w, h, alpha, (1.0 - a * 2.0).max(0.0), f.fonts);
+        cv.restore();
+    }
+}
+
+/// Width of the vertical list's logo column (narrower on a portrait screen).
+fn vertical_col_w(vw: f32) -> f32 {
+    if vertical_portrait(vw) { 480.0 } else { 608.0 }
+}
+
+fn vertical_portrait(vw: f32) -> bool {
+    vw < DESIGN_W * 0.75
+}
+
+/// Where the vertical list's column starts: below the title block on a
+/// portrait screen (so the title keeps the full width), else below the
+/// playlist name and counter in the top-right corner.
+fn vertical_col_top(vw: f32) -> f32 {
+    if vertical_portrait(vw) { 540.0 } else { 190.0 }
+}
+
+/// Vertical: a list of wheel logos down the right side. Next moves
+/// the list up, so the next game comes in from below.
+fn draw_vertical(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
+    let col_w = vertical_col_w(vw);
+    let sel_h = col_w * 0.48;
+    // Hug the right edge: a round logo sits 40 units from it, and a wide one
+    // is capped so it still stays 30 units clear of the edge.
+    let cx = vw - 40.0 - sel_h / 2.0;
+    let sel_w = col_w.min(2.0 * (vw - 30.0 - cx));
+    let (top, bottom) = (vertical_col_top(vw), dh - 50.0);
+    let cy = (top + bottom) / 2.0;
+    let step = col_w * 0.42;
+    let sel = f.entry(f.wheel.selected());
+
+    // Selection marker: a soft glow and a thin accent bar just left of the logo.
+    let pos = f.wheel.pos;
+    let near = 1.0 - clamp((pos - pos.round()).abs() * 2.0, 0.0, 1.0);
+    let hue = entry_hue(sel);
+    slot_glow(cv, cx, cy, sel_w * 0.75, sel_h * 0.85, hue, 0.5 + 0.5 * near);
+    let (logo_w, _) = fit(sel.logo.as_ref().map_or(1.6, |l| l.aspect), sel_w, sel_h);
+    let mut p = Path::new();
+    p.rounded_rect(cx - logo_w / 2.0 - 30.0, cy - sel_h * 0.4, 6.0, sel_h * 0.8, 3.0);
+    cv.fill_path(&p, &Paint::color(hue_color(hue, 0.9, 0.65, 0.5 + 0.4 * near)));
+
+    let range = ((bottom - top) / 2.0 / step).ceil() + 1.0;
+    for (i, d) in visible_items(pos, f.order.len(), range) {
+        let y = cy + d * step;
+        let ad = d.abs();
+        let sc = 0.58 + 0.42 * (1.0 - ad).max(0.0);
+        // Fade out towards the ends of the column instead of popping.
+        let edge = ((y - top + step * 0.5) / step).min((bottom + step * 0.5 - y) / step);
+        let alpha = clamp(1.1 - ad * 0.2, 0.0, 1.0) * clamp(edge, 0.0, 1.0) * if ad < 0.5 { 1.0 } else { 0.75 };
+        if alpha <= 0.0 {
+            continue;
+        }
+        let e = f.entry(i);
+        let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
+        let (w, h) = fit(aspect, sel_w * sc, sel_h * sc);
+        cv.save();
+        cv.translate(cx, y);
+        draw_logo(cv, e, w, h, alpha, (1.0 - ad * 1.6).max(0.0), f.fonts);
+        cv.restore();
+    }
+}
+
 /// Mirrored bottom half of an image under a logo whose bottom edge is at `top`.
 /// `clip_x` limits it to one strip of a turned cover.
 #[allow(clippy::too_many_arguments)]
@@ -431,7 +519,8 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     let e = f.entry(idx);
     let hue = entry_hue(e);
     let a = ease_out(f.wheel.info_t / INFO_FADE);
-    let off = (1.0 - a) * 28.0;
+    // Slide in from the side the wheel is moving from: from the right on Next, the left on Prior.
+    let off = (1.0 - a) * 28.0 * f.wheel.last_dir as f32;
     let (x, y) = (96.0f32, 120.0f32);
 
     let text = |font: FontId, size: f32, c: Color, align: Align| {
@@ -443,7 +532,9 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     }
     // Title: the game name, then its "(Maker Year)" on a smaller second line.
     // A long name shrinks to fit, then wraps onto two lines itself.
-    let max_w = vw - 2.0 * x;
+    // On a landscape screen the vertical list runs alongside the title: keep clear of it.
+    let beside_list = f.style == WheelStyle::Vertical && !vertical_portrait(vw);
+    let max_w = vw - 2.0 * x - if beside_list { vertical_col_w(vw) + 60.0 } else { 0.0 };
     let probe = text(f.fonts.display, 92.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), Align::Left);
     let width_at_92 = |cv: &Cv, s: &str| cv.measure_text(0.0, 0.0, s, &probe).map(|m| m.width()).unwrap_or(0.0);
     let (name, suffix) = split_suffix(&e.title);

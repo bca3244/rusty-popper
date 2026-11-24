@@ -3,7 +3,7 @@
 //!
 //! Usage:
 //!   rusty-popper [--popper DIR] [--mpv PATH\libmpv-2.dll] [--game TEXT]
-//!                [--wheel arc|flow] [--seconds N] [--list] [--dry-run]
+//!                [--wheel arc|flow|minimal|vertical] [--seconds N] [--list] [--dry-run]
 //!                [--print-launch]
 //!
 //! Browse with Left/Right (or Popper's bound buttons), W switches wheel style,
@@ -133,7 +133,7 @@ fn parse_args() -> Result<Args> {
             "--game" => a.game = Some(val()?),
             "--wheel" => {
                 let v = val()?;
-                a.wheel = Some(WheelStyle::parse(&v).ok_or_else(|| anyhow!("--wheel must be arc or flow, not {v}"))?);
+                a.wheel = Some(WheelStyle::parse(&v).ok_or_else(|| anyhow!("--wheel must be arc, flow, minimal or vertical, not {v}"))?);
             }
             "--seconds" => a.seconds = Some(val()?.parse()?),
             "--restarted" => a.restarted = val()?.parse()?,
@@ -487,7 +487,6 @@ struct Gfx {
     wheel: wheel::Wheel,
     joysticks: input::Joysticks,
     shown: usize,    // index whose media is on the screens
-    swapped_at: f64, // when that media was loaded (for the fade-in)
     t0: Instant,
     last: Instant,
     /// The playfield window's handle, for taking the focus back.

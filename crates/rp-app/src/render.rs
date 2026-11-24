@@ -132,7 +132,6 @@ impl App {
             wheel: wheel::Wheel::new(self.view.len(), start_pos),
             joysticks: input::Joysticks::new(),
             shown: self.start,
-            swapped_at: -10.0,
             t0: now,
             last: now,
         };
@@ -256,11 +255,14 @@ impl App {
         }
 
         g.wheel.update(dt, now);
-        // Swap media once the selection has rested for a moment.
+        // Swap media once the selection has rested for a moment. Cover flow
+        // swaps at once on a step after a pause long enough for the last slide
+        // to finish, so the screens move with the wheel; fast scrolling waits.
         let sel = self.view.get(g.wheel.selected()).copied().unwrap_or(g.shown);
-        if sel != g.shown && now - g.wheel.changed_at >= wheel::MEDIA_DEBOUNCE as f64 {
+        let settled = now - g.wheel.changed_at >= wheel::MEDIA_DEBOUNCE as f64;
+        let paused = g.wheel.gap >= (wheel::MEDIA_DEBOUNCE + video::SLIDE_SECS) as f64;
+        if sel != g.shown && (settled || (style == WheelStyle::Flow && paused)) {
             g.shown = sel;
-            g.swapped_at = now;
             let item = &self.lib.items[sel];
             let slide = style == WheelStyle::Flow;
             let dir = g.wheel.last_dir;
@@ -327,8 +329,6 @@ impl App {
         let pf = &g.outs[0];
         g.canvas.save();
         let (lw, lh) = face_player(&mut g.canvas, w, h, pf_rot);
-        // Arc fades the new video in from black; cover flow slides it instead.
-        let fade = if style == WheelStyle::Flow || g.shown != sel { 1.0 } else { ((now - g.swapped_at) as f32 / wheel::MEDIA_FADE).min(1.0) };
         let letter = self.letter.map(|(c, at)| (c, at.elapsed().as_secs_f32()));
         let frame = wheel::Frame {
             style,
@@ -337,7 +337,6 @@ impl App {
             order: &self.view,
             playlist: self.lib.playlist_name(self.playlist),
             fonts: &g.fonts,
-            video_fade: fade,
             letter,
             update_note: match self.updater.status() {
                 updater::Status::Available(r) => Some(format!("UPDATE v{} AVAILABLE", r.version)),

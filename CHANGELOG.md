@@ -2,6 +2,18 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.29] - 2026-11-24
+
+### Added
+- Two new wheel styles, picked in **Options → Wheel style** (or with W), which now cycles Arc, Cover flow, Minimal, Vertical:
+  - **Minimal**: one big logo near the bottom with its neighbours peeking in, half cut off, at the screen edges, and a lighter shade so more of the playfield video shows.
+  - **Vertical**: a list of large logos down the right edge, with the selected game biggest and marked by a glow and an accent bar. On a portrait playfield the list starts below the title so long names keep the full width.
+  - Both swap the screens' videos the same way as the arc wheel. In `rusty-popper.toml` they are `style = "minimal"` and `style = "vertical"`.
+
+### Changed
+- The arc wheel no longer fades the playfield video in from black after a game change: all screens cut to the new game together.
+- The game title, tags and maker line slide in from the side the wheel is moving from (from the right on Next, from the left on Prior). They always came from the right before.
+- Cover flow: on a single step the screens now slide together with the wheel, instead of waiting for the wheel to settle and the new video's first frame. The incoming screen stays dark until its video is ready. Fast scrolling still waits for the wheel to rest, so it stays smooth.
 ## [0.2.28] - 2026-11-24
 
 ### Changed
