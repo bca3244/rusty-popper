@@ -550,6 +550,7 @@ struct Gfx {
     /// The playfield's refresh period: frames are never shorter than this,
     /// even if the driver ignores vsync.
     frame_period: Duration,
+    pacer: perf::Pacer,
     /// The playfield window's handle, for taking the focus back.
     pf_hwnd: isize,
     gl: glow::Context,

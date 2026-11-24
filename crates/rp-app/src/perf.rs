@@ -81,3 +81,58 @@ impl Frames {
         }
     }
 }
+
+/// Keeps the menu from drawing faster than the playfield can show when the
+/// driver doesn't honour vsync. While vsync works the swap already waits,
+/// and this only checks once a second that it still does.
+pub struct Pacer {
+    /// Whether vsync was found not to limit the frame rate.
+    unpaced: bool,
+    window_start: Instant,
+    frames: u32,
+    /// When the next frame may start (only while `unpaced`).
+    next: Instant,
+}
+
+impl Pacer {
+    pub fn new() -> Pacer {
+        let now = Instant::now();
+        Pacer { unpaced: false, window_start: now, frames: 0, next: now }
+    }
+
+    /// Call right after the playfield's swap.
+    pub fn after_swap(&mut self, period: Duration) {
+        let now = Instant::now();
+        if !self.unpaced {
+            self.frames += 1;
+            let elapsed = now - self.window_start;
+            if elapsed >= Duration::from_secs(1) {
+                let expected = elapsed.as_secs_f64() / period.as_secs_f64();
+                // Well over the refresh rate: the swap isn't waiting.
+                if f64::from(self.frames) > expected * 1.1 {
+                    log::info!(
+                        "perf: vsync isn't limiting frames ({} in {:.1} s at {:.0} Hz); pacing them instead",
+                        self.frames,
+                        elapsed.as_secs_f64(),
+                        1.0 / period.as_secs_f64()
+                    );
+                    self.unpaced = true;
+                    self.next = now;
+                }
+                self.window_start = now;
+                self.frames = 0;
+            }
+            // Never spin, even before the check above has run.
+            std::thread::sleep(Duration::from_millis(1));
+            return;
+        }
+        // A steady beat of one frame per refresh; after a slow frame, start
+        // again from now rather than rushing to catch up.
+        self.next += period;
+        if self.next > now {
+            std::thread::sleep(self.next - now);
+        } else if now - self.next > period {
+            self.next = now;
+        }
+    }
+}

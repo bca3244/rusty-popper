@@ -161,6 +161,7 @@ impl App {
             perf: perf::Frames::new(),
             vsync_on: None,
             frame_period,
+            pacer: perf::Pacer::new(),
         };
         // Load logos nearest the starting game first.
         gfx.load_logos(&self.lib.items, self.start);
@@ -475,13 +476,9 @@ impl App {
         if self.deadline.is_some_and(|d| Instant::now() >= d) {
             el.exit();
         }
-        // Normally the swap above waits for vsync. If the driver ignores it,
-        // don't draw faster than the screen can show (less a little slack,
-        // so a working vsync is never missed because of this).
-        let pace = g.frame_period.saturating_sub(Duration::from_millis(1)).max(MIN_FRAME);
-        if let Some(short) = pace.checked_sub(frame_start.elapsed()) {
-            std::thread::sleep(short);
-        }
+        // Normally the swap above waits for vsync. If the driver ignores it
+        // (seen on the cabinet), pace frames to the refresh rate ourselves.
+        g.pacer.after_swap(g.frame_period);
         Ok(())
     }
 
