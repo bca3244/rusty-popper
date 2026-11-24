@@ -9,6 +9,7 @@ use anyhow::{bail, Result};
 use rp_config::{self as config, Slot};
 use rp_db::{self as db, Emulator, Game};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// What a wheel entry is.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,6 +28,25 @@ pub struct Item {
     pub media_dir: PathBuf,
     pub wheel_png: Option<PathBuf>,
     pub kind: Kind,
+    /// Media found so far, per slot, so each lookup probes the disk only once.
+    pub media_cache: MediaCache,
+}
+
+/// Remembered media lookups. Never part of an item's identity: two snapshots
+/// of the same database compare equal whatever has been looked up.
+#[derive(Default, Clone)]
+pub struct MediaCache([OnceLock<Option<PathBuf>>; 11]);
+
+impl PartialEq for MediaCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for MediaCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MediaCache")
+    }
 }
 
 impl Item {
@@ -34,7 +54,8 @@ impl Item {
         if self.media_name.is_empty() {
             return None;
         }
-        config::find_media(&self.media_dir, slot, &self.media_name)
+        let cell = &self.media_cache.0[slot as usize];
+        cell.get_or_init(|| config::find_media(&self.media_dir, slot, &self.media_name)).clone()
     }
 
     pub fn is_playlist(&self) -> bool {
@@ -112,6 +133,14 @@ fn view_for(n: usize, games: Vec<usize>, items: &[Item], game_count: usize) -> V
 }
 
 impl Library {
+    /// Forgets remembered media lookups (media may have been added or
+    /// removed, e.g. by a tool run while a game played).
+    pub fn forget_media(&mut self) {
+        for it in &mut self.items {
+            it.media_cache = MediaCache::default();
+        }
+    }
+
     /// Reads a consistent snapshot of `<popper>\PUPDatabase.db`.
     pub fn load(popper: &Path) -> Result<Library> {
         let db = db::PopperDb::open_copy(&popper.join("PUPDatabase.db"))?;
@@ -128,6 +157,7 @@ impl Library {
                     wheel_png: config::find_wheel(&media_dir, &game.name),
                     media_dir,
                     kind: Kind::Game { game: Box::new(game), emu: Box::new(emu.clone()) },
+                    media_cache: MediaCache::default(),
                 })
             })
             .collect();
@@ -154,6 +184,7 @@ impl Library {
                 media_name: logo,
                 media_dir: default_media.clone(),
                 kind: Kind::Playlist(n),
+                media_cache: MediaCache::default(),
             });
         }
 
@@ -296,7 +327,7 @@ mod tests {
     fn go_back_wheel_sits_right_before_the_games() {
         // Two games-to-be (stood in for by playlist items: view_for only looks
         // at kinds past game_count), then All games and three playlists.
-        let item = |k| Item { title: String::new(), media_name: String::new(), media_dir: PathBuf::new(), wheel_png: None, kind: k };
+        let item = |k| Item { title: String::new(), media_name: String::new(), media_dir: PathBuf::new(), wheel_png: None, kind: k, media_cache: MediaCache::default() };
         let items: Vec<Item> = [9, 9, 0, 1, 2, 3].into_iter().map(|n| item(Kind::Playlist(n))).collect();
         // In playlist 2: its games, the other playlists, then All games (wrapping to game 0).
         assert_eq!(view_for(2, vec![1, 0], &items, 2), [1, 0, 3, 5, 2]);

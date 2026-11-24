@@ -16,7 +16,9 @@ const FLOW_STEP: f32 = 270.0;
 const FLOW_TURN: f32 = 0.85;
 /// Delay after the selection settles before media on the screens is swapped.
 pub const MEDIA_DEBOUNCE: f32 = 0.16;
-const SPRING: f32 = 11.0;
+/// How quickly the drawn wheel catches up with the selection (per second).
+/// Stiff enough that during fast scrolling it trails by under half a game.
+const SPRING: f32 = 18.0;
 const INFO_FADE: f32 = 0.35;
 
 pub struct Fonts {
@@ -356,9 +358,13 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
 
         let dim = 1.0 - 0.4 * a1 - 0.06 * (a - 1.0).max(0.0);
         let strip_alpha = alpha * dim;
-        for k in 0..STRIPS {
-            let u0 = k as f32 / STRIPS as f32 - 0.5;
-            let u1 = (k + 1) as f32 / STRIPS as f32 - 0.5;
+        // Covers further out are smaller and dimmer: fewer strips do.
+        let strips = if a > 1.5 { STRIPS / 2 } else { STRIPS };
+        // A reflection this faint can't be seen.
+        let reflect = strip_alpha >= 0.05;
+        for k in 0..strips {
+            let u0 = k as f32 / strips as f32 - 0.5;
+            let u1 = (k + 1) as f32 / strips as f32 - 0.5;
             let p0 = focal / (focal + u0 * w * theta.sin());
             let p1 = focal / (focal + u1 * w * theta.sin());
             let x0 = cx + off + u0 * w * theta.cos() * p0;
@@ -370,14 +376,16 @@ fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
             }
             // Place the whole image so that slice k lands exactly on [dx, dx+dw].
             // (|theta| <= 1.2 rad, so x1 > x0 and slices stay in order.)
-            let img_w = dw * STRIPS as f32;
+            let img_w = dw * strips as f32;
             let img_x = dx - k as f32 * dw;
             let mut paint = Paint::image(logo.img, img_x, y0 - hh / 2.0, img_w, hh, 0.0, strip_alpha);
             paint.set_anti_alias(false);
             let mut p = Path::new();
             p.rect(dx, y0 - hh / 2.0, dw, hh);
             cv.fill_path(&p, &paint);
-            reflection(cv, logo.img, img_x, y0 + hh / 2.0 + 4.0, img_w, hh, 0.13 * strip_alpha, Some((dx, dw)));
+            if reflect {
+                reflection(cv, logo.img, img_x, y0 + hh / 2.0 + 4.0, img_w, hh, 0.13 * strip_alpha, Some((dx, dw)));
+            }
         }
     }
 }

@@ -40,6 +40,11 @@ const BLOCKING_SCRIPT: Duration = Duration::from_secs(20);
 /// The game counts as closed once no game process has been seen for this long
 /// (a launcher stub may exit a moment before the real game starts).
 const EXIT_CONFIRM: Duration = Duration::from_millis(1200);
+/// The shorter confirm used once a stub hand-off can no longer be the reason
+/// the processes vanished (the game has run a while, or a close was asked for).
+const EXIT_CONFIRM_SETTLED: Duration = Duration::from_millis(300);
+/// Once the game has run this long, a vanished process means it really ended.
+const STUB_WINDOW: Duration = Duration::from_secs(20);
 /// After a close request, how long the post script gets before the game's
 /// processes are killed.
 const KILL_AFTER: Duration = Duration::from_secs(20);
@@ -608,12 +613,15 @@ impl LaunchJob {
                 ctl.set_pids(&tracker.known);
                 found
             };
+            let confirm = if stop_at.is_some() || played.elapsed() > STUB_WINDOW { EXIT_CONFIRM_SETTLED } else { EXIT_CONFIRM };
             if alive {
                 gone_since = None;
-            } else if gone_since.get_or_insert_with(Instant::now).elapsed() >= EXIT_CONFIRM {
+            } else if gone_since.get_or_insert_with(Instant::now).elapsed() >= confirm {
+                log::info!("Game processes gone; returning to the menu");
                 break;
             }
-            std::thread::sleep(Duration::from_millis(250));
+            // Poll faster once everything looks gone, so the exit is noticed quickly.
+            std::thread::sleep(Duration::from_millis(if gone_since.is_some() { 75 } else { 250 }));
         }
         (Outcome::Finished { secs: played.elapsed().as_secs() }, stop_at.is_some())
     }

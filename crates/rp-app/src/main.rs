@@ -25,6 +25,7 @@ mod logging;
 mod menu;
 mod mpv;
 mod overlay;
+mod perf;
 mod reload;
 mod render;
 mod session;
@@ -81,6 +82,10 @@ const PLAY_POLL: Duration = Duration::from_millis(50);
 /// A frame never takes less than this, so a display without vsync (or a
 /// covered window) can't turn the render loop into a busy loop.
 const MIN_FRAME: Duration = Duration::from_millis(4);
+/// Time per frame for turning loaded logos into textures.
+const LOGO_UPLOAD_BUDGET: Duration = Duration::from_millis(3);
+/// A secondary screen with nothing new is still redrawn this often.
+const REDRAW_EVERY: Duration = Duration::from_secs(1);
 /// This many failed frames in a row (about ten seconds) and the menu restarts itself.
 const MAX_FRAME_ERRORS: u32 = 200;
 /// How many times in a row the menu restarts itself before giving up.
@@ -239,9 +244,18 @@ fn run() -> Result<()> {
     let found = discover::find_popper(args.popper.clone(), settings.paths.popper_dir.clone())?;
     let popper = found.dir;
 
+    // libmpv is a big DLL: load it while the database is read.
+    let (mpv_arg, mpv_conf) = (args.mpv.clone(), settings.paths.mpv_dll.clone());
+    let mpv_loading = std::thread::spawn(move || -> Result<(PathBuf, mpv::Mpv)> {
+        let dll = find_mpv_dll(mpv_arg, mpv_conf)?;
+        let mpv = mpv::Mpv::load(&dll)?;
+        Ok((dll, mpv))
+    });
     rp_launch::remove_stale_temp_files();
     let db_seen = db_mtime(&popper);
+    let t = Instant::now();
     let lib = Library::load(&popper).with_context(|| format!("reading Popper's database in {}", popper.display()))?;
+    perf::note("Reading Popper's database", t, 300);
     let mut joy_overrides: Vec<(u32, input::Action)> = Vec::new();
     let inp = &settings.input;
     for (buttons, action) in [
@@ -297,8 +311,9 @@ fn run() -> Result<()> {
         }
         return Ok(());
     }
-    let dll = find_mpv_dll(args.mpv, settings.paths.mpv_dll.clone())?;
-    let mpv = mpv::Mpv::load(&dll)?;
+    let t = Instant::now();
+    let (dll, mpv) = mpv_loading.join().map_err(|_| anyhow!("loading libmpv panicked"))??;
+    perf::note("Waiting for libmpv", t, 100);
     log::info!("libmpv: {}", dll.display());
     if args.dry_run {
         return Ok(());
@@ -334,6 +349,7 @@ fn run() -> Result<()> {
         ),
         lib,
         bindings,
+        key_repeat: input::KeyRepeat::default(),
         joy_overrides,
         keyboard_quit: inp.keyboard_quit,
         joy_needs_focus: inp.joystick_needs_focus,
@@ -436,6 +452,17 @@ struct ScreenOut {
     /// Whether the file asked for by the last `show` has been opened. Until
     /// then a "playback restarted" event still belongs to the previous video.
     file_loaded: Cell<bool>,
+    /// When the last `show` was asked for, to log how long the switch took.
+    loaded_at: Cell<Option<Instant>>,
+    /// Whether the decoder mpv picked has been logged yet.
+    hwdec_logged: Cell<bool>,
+    /// Must be redrawn even without a new video frame (new file, shown again,
+    /// a card just closed). Secondary screens skip frames with nothing new.
+    dirty: Cell<bool>,
+    /// When this screen was last presented, for a periodic safety redraw.
+    drawn_at: Cell<Instant>,
+    /// Whether a card was on this screen last frame.
+    had_card: Cell<bool>,
 }
 
 impl ScreenOut {
@@ -452,6 +479,8 @@ impl ScreenOut {
     /// Plays `media` without showing or hiding the window.
     fn load(&self, media: Option<&Path>) {
         self.file_loaded.set(false);
+        self.dirty.set(true);
+        self.loaded_at.set(media.map(|_| Instant::now()));
         if let Err(e) = self.player.show(media) {
             log::warn!("{:?}: {e}", self.screen.slot);
         }
@@ -468,6 +497,16 @@ impl ScreenOut {
                     if let Some(s) = self.slide.as_mut() {
                         s.video_ready();
                     }
+                    if let Some(at) = self.loaded_at.take() {
+                        let ms = at.elapsed().as_millis();
+                        if ms >= perf::SLOW_SWITCH_MS {
+                            log::info!("perf: {:?} media took {ms} ms to start", self.screen.slot);
+                        }
+                    }
+                    if !self.hwdec_logged.replace(true) {
+                        let dec = self.player.get_string("hwdec-current").unwrap_or_else(|| "?".into());
+                        log::info!("{:?}: video decoder hwdec={dec}", self.screen.slot);
+                    }
                 }
                 _ => {}
             }
@@ -483,12 +522,13 @@ struct Gfx {
     canvas: Canvas<OpenGl>,
     fonts: wheel::Fonts,
     entries: Vec<wheel::Entry>,
-    logos: Receiver<assets::Logo>,
+    logos: assets::Loader,
     wheel: wheel::Wheel,
     joysticks: input::Joysticks,
     shown: usize,    // index whose media is on the screens
     t0: Instant,
     last: Instant,
+    perf: perf::Frames,
     /// The playfield window's handle, for taking the focus back.
     pf_hwnd: isize,
     gl: glow::Context,
@@ -519,14 +559,8 @@ impl Gfx {
 
     /// (Re)starts loading the logos that aren't in memory, nearest `near` first.
     fn load_logos(&mut self, items: &[Item], near: usize) {
-        let n = items.len() as i64;
-        let mut order: Vec<usize> = (0..items.len()).collect();
-        order.sort_by_key(|i| {
-            let d = (*i as i64 - near as i64).rem_euclid(n);
-            d.min(n - d)
-        });
         let paths = items.iter().zip(&self.entries).map(|(it, e)| if e.logo.is_some() { None } else { it.wheel_png.clone() }).collect();
-        self.logos = assets::spawn_loader(paths, order);
+        self.logos = assets::spawn_loader(paths, near);
     }
 }
 
@@ -615,6 +649,8 @@ struct App {
     /// The games and playlists, as last read from Popper's database.
     lib: Library,
     bindings: input::Bindings,
+    /// Browsing keys held down, repeated on our own beat.
+    key_repeat: input::KeyRepeat,
     /// From rusty-popper.toml; kept to rebuild `bindings` when the database changes.
     joy_overrides: Vec<(u32, input::Action)>,
     keyboard_quit: bool,
@@ -687,9 +723,16 @@ fn state_path() -> PathBuf {
 /// The app icon (copper-ring RP wheel) for the windows' title/Alt-Tab icon.
 fn window_icon() -> Option<winit::window::Icon> {
     static PNG: &[u8] = include_bytes!("../assets/rusty-popper-256.png");
-    let img = image::load_from_memory(PNG).ok()?.to_rgba8();
-    let (w, h) = img.dimensions();
-    winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
+    // Decoded once and shared by every window.
+    static RGBA: OnceLock<Option<(Vec<u8>, u32, u32)>> = OnceLock::new();
+    let (rgba, w, h) = RGBA
+        .get_or_init(|| {
+            let img = image::load_from_memory(PNG).ok()?.to_rgba8();
+            let (w, h) = img.dimensions();
+            Some((img.into_raw(), w, h))
+        })
+        .as_ref()?;
+    winit::window::Icon::from_rgba(rgba.clone(), *w, *h).ok()
 }
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
@@ -728,11 +771,19 @@ impl ApplicationHandler for App {
             // Synthetic presses are winit replaying held keys when focus moves
             // between our windows (e.g. a screen shown/hidden by a media swap);
             // acting on them made one Start press both switch playlist and launch.
-            WindowEvent::KeyboardInput { event, is_synthetic, .. } if event.state == ElementState::Pressed && !is_synthetic => {
+            // Windows' own key repeats are ignored: held browsing keys repeat
+            // on the same beat as joystick buttons (see KeyRepeat).
+            WindowEvent::KeyboardInput { event, is_synthetic, .. } if event.state == ElementState::Pressed && !is_synthetic && !event.repeat => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if let Some(a) = self.bindings.key(code, event.repeat) {
+                    if let Some(a) = self.bindings.key(code, false) {
+                        self.key_repeat.pressed(code, a);
                         self.act(el, a);
                     }
+                }
+            }
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if event.state == ElementState::Released => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    self.key_repeat.released(code);
                 }
             }
             _ => {}

@@ -4,7 +4,10 @@
 
 use image::{imageops, imageops::FilterType, GrayImage, RgbaImage};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+use std::time::Instant;
 
 const LOGO_MAX: u32 = 512;
 /// The glow sprite is the logo silhouette at GLOW_INNER px inside a
@@ -20,18 +23,56 @@ pub struct Logo {
     pub hue: f32,
 }
 
-/// A receiver that never yields anything (no loader running).
-pub fn idle() -> Receiver<Logo> {
-    channel().1
+/// Logos being loaded on helper threads, nearest the wheel's selection first.
+pub struct Loader {
+    rx: Receiver<Logo>,
+    near: Arc<AtomicUsize>,
+    /// Set when this loader is dropped, so its threads stop early.
+    stop: Arc<AtomicBool>,
 }
 
-/// Loads `paths` on a worker thread in `order` (closest to the selection first).
-pub fn spawn_loader(paths: Vec<Option<PathBuf>>, order: Vec<usize>) -> Receiver<Logo> {
+impl Loader {
+    /// The next finished logo, if any.
+    pub fn try_recv(&self) -> Option<Logo> {
+        self.rx.try_recv().ok()
+    }
+
+    /// Steers loading towards item `index` (e.g. after a letter jump).
+    pub fn set_near(&self, index: usize) {
+        self.near.store(index, Ordering::Relaxed);
+    }
+}
+
+impl Drop for Loader {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// A loader with nothing to load.
+pub fn idle() -> Loader {
+    Loader { rx: channel().1, near: Arc::new(AtomicUsize::new(0)), stop: Arc::new(AtomicBool::new(true)) }
+}
+
+/// Loads `paths` on a few helper threads, always picking the unloaded logo
+/// closest to the selection (which `Loader::set_near` keeps up to date), so
+/// the logos on screen arrive first even after a jump.
+pub fn spawn_loader(paths: Vec<Option<PathBuf>>, near: usize) -> Loader {
     let (tx, rx) = channel();
-    std::thread::Builder::new()
-        .name("logo-loader".into())
-        .spawn(move || {
-            for i in order {
+    let near = Arc::new(AtomicUsize::new(near));
+    let stop = Arc::new(AtomicBool::new(false));
+    let claimed: Arc<Vec<AtomicBool>> = Arc::new(paths.iter().map(|p| AtomicBool::new(p.is_none())).collect());
+    let paths = Arc::new(paths);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1)).clamp(1, 3);
+    let started = Instant::now();
+    let remaining = Arc::new(AtomicUsize::new(threads));
+    for t in 0..threads {
+        let (tx, near, stop, claimed, paths, remaining) = (tx.clone(), near.clone(), stop.clone(), claimed.clone(), paths.clone(), remaining.clone());
+        let spawned = std::thread::Builder::new().name(format!("logo-loader-{t}")).spawn(move || {
+            while let Some(i) = claim_nearest(&claimed, near.load(Ordering::Relaxed)) {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 let Some(path) = &paths[i] else { continue };
                 // A bad image must not stop the rest from loading, even if the
                 // decoder panics on it.
@@ -45,9 +86,32 @@ pub fn spawn_loader(paths: Vec<Option<PathBuf>>, order: Vec<usize>) -> Receiver<
                     Err(_) => log::warn!("wheel {}: decoder panicked", path.display()),
                 }
             }
-        })
-        .expect("spawn logo loader");
-    rx
+            if remaining.fetch_sub(1, Ordering::Relaxed) == 1 {
+                crate::perf::note("Loading wheel logos", started, 2000);
+            }
+        });
+        if let Err(e) = spawned {
+            log::warn!("Couldn't start a logo loader: {e}");
+        }
+    }
+    Loader { rx, near, stop }
+}
+
+/// Claims the unclaimed index closest to `near` (around the wheel's wrap).
+fn claim_nearest(claimed: &[AtomicBool], near: usize) -> Option<usize> {
+    let n = claimed.len();
+    if n == 0 {
+        return None;
+    }
+    let near = near.min(n - 1);
+    for d in 0..=n / 2 {
+        for i in [(near + d) % n, (near + n - d) % n] {
+            if !claimed[i].load(Ordering::Relaxed) && !claimed[i].swap(true, Ordering::Relaxed) {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 fn load(index: usize, path: &PathBuf) -> anyhow::Result<Logo> {
@@ -130,4 +194,20 @@ pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let m = l - c / 2.0;
     let f = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
     (f(r), f(g), f(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claims_nearest_first_and_each_once() {
+        let claimed: Vec<AtomicBool> = (0..6).map(|i| AtomicBool::new(i == 4)).collect();
+        let mut got = Vec::new();
+        while let Some(i) = claim_nearest(&claimed, 0) {
+            got.push(i);
+        }
+        assert_eq!(got, [0, 1, 5, 2, 3]);
+        assert!(claim_nearest(&[], 0).is_none());
+    }
 }

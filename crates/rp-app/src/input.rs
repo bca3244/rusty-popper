@@ -193,6 +193,13 @@ pub struct Joysticks {
     held: Vec<(u32, u32, Instant, Instant)>, // (joy id, button, pressed at, last fired)
     /// Whether an exit button was down at the last [`exit_pressed`](Self::exit_pressed) check.
     exit_down: bool,
+    /// A rescan running on a helper thread.
+    scanning: Option<std::sync::mpsc::Receiver<Vec<u32>>>,
+}
+
+/// The winmm joystick ids that answer.
+fn scan_ids() -> Vec<u32> {
+    (0..16).filter(|id| Joysticks::read(*id).is_some()).collect()
 }
 
 /// How often to look for joysticks: often while none is known, rarely once
@@ -201,12 +208,82 @@ const SCAN_EVERY_NONE: Duration = Duration::from_secs(5);
 const SCAN_EVERY_SOME: Duration = Duration::from_secs(60);
 
 const REPEAT_DELAY: Duration = Duration::from_millis(400);
-const REPEAT_EVERY: Duration = Duration::from_millis(90);
+
+/// Time between repeats while a browsing button is held: it speeds up the
+/// longer the button stays down, so long lists go by quickly.
+fn repeat_every(held_for: Duration) -> Duration {
+    match held_for.as_millis() {
+        0..=1499 => Duration::from_millis(90),
+        1500..=2999 => Duration::from_millis(55),
+        _ => Duration::from_millis(35),
+    }
+}
+
+/// Whether a held button that last fired at `fired` (pressed at `since`)
+/// repeats now, and if so the new "last fired" time. Repeats keep an even
+/// beat rather than drifting with the frame rate; after a stall it restarts
+/// from now instead of firing a burst.
+fn repeat_due(since: Instant, fired: Instant, now: Instant) -> Option<Instant> {
+    if now - since < REPEAT_DELAY {
+        return None;
+    }
+    let every = repeat_every(now - since);
+    // The first repeat comes right at the delay.
+    let next = if fired == since { since + REPEAT_DELAY } else { fired + every };
+    if now < next {
+        return None;
+    }
+    Some(if now - next > every { now } else { next })
+}
+
+/// Auto-repeat for keyboard browsing keys on our own beat (the same as the
+/// joystick's), instead of the Windows key-repeat setting.
+#[derive(Default)]
+pub struct KeyRepeat {
+    held: Vec<(KeyCode, i32, Action, Instant, Instant)>, // (key, virtual key, action, pressed at, last fired)
+}
+
+impl KeyRepeat {
+    /// A key went down (not a Windows repeat).
+    pub fn pressed(&mut self, code: KeyCode, action: Action) {
+        if !action.repeats() || self.held.iter().any(|h| h.0 == code) {
+            return;
+        }
+        // The most specific Windows key code for it, to check it's still down.
+        let vk = (0..=0xFF).rev().find(|&vk| vk_to_keycode(vk) == Some(code)).unwrap_or(0) as i32;
+        let now = Instant::now();
+        self.held.push((code, vk, action, now, now));
+    }
+
+    pub fn released(&mut self, code: KeyCode) {
+        self.held.retain(|h| h.0 != code);
+    }
+
+    pub fn clear(&mut self) {
+        self.held.clear();
+    }
+
+    /// Adds the repeats that are due.
+    pub fn tick(&mut self, out: &mut Vec<Action>) {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        let now = Instant::now();
+        // A release can be missed (focus moved between our windows): ask Windows.
+        self.held.retain(|h| h.1 == 0 || unsafe { GetAsyncKeyState(h.1) } < 0);
+        for h in self.held.iter_mut() {
+            if let Some(fired) = repeat_due(h.3, h.4, now) {
+                h.4 = fired;
+                out.push(h.2);
+            }
+        }
+    }
+}
 
 impl Joysticks {
     pub fn new() -> Self {
-        let mut j = Joysticks { ids: Vec::new(), last_scan: Instant::now(), held: Vec::new(), exit_down: false };
-        j.scan();
+        let mut j = Joysticks { ids: Vec::new(), last_scan: Instant::now(), held: Vec::new(), exit_down: false, scanning: None };
+        let t = Instant::now();
+        j.ids = scan_ids();
+        crate::perf::note("Joystick scan", t, 5);
         j
     }
 
@@ -218,10 +295,6 @@ impl Joysticks {
         (unsafe { joyGetPosEx(id, &mut info) } == 0).then_some(info.dwButtons)
     }
 
-    fn scan(&mut self) {
-        self.ids = (0..16).filter(|id| Self::read(*id).is_some()).collect();
-        self.last_scan = Instant::now();
-    }
 
     pub fn count(&self) -> usize {
         self.ids.len()
@@ -242,10 +315,40 @@ impl Joysticks {
         }
     }
 
+    /// Looks for joysticks again now and then, on a helper thread: asking
+    /// winmm about absent ids can stall, and that mustn't hold up a frame.
     fn rescan_if_due(&mut self) {
+        if let Some(rx) = &self.scanning {
+            match rx.try_recv() {
+                Ok(ids) => {
+                    if ids != self.ids {
+                        log::info!("Joysticks found: {}", ids.len());
+                    }
+                    self.ids = ids;
+                    self.scanning = None;
+                    self.last_scan = Instant::now();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.scanning = None;
+                    self.last_scan = Instant::now();
+                }
+            }
+            return;
+        }
         let every = if self.ids.is_empty() { SCAN_EVERY_NONE } else { SCAN_EVERY_SOME };
         if self.last_scan.elapsed() > every {
-            self.scan();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("joystick-scan".into()).spawn(move || {
+                let t = Instant::now();
+                let ids = scan_ids();
+                crate::perf::note("Joystick scan", t, 5);
+                let _ = tx.send(ids);
+            });
+            match spawned {
+                Ok(_) => self.scanning = Some(rx),
+                Err(_) => self.last_scan = Instant::now(),
+            }
         }
     }
 
@@ -296,14 +399,13 @@ impl Joysticks {
                         out.push(action);
                         still_held.push((id, b, now, now));
                     }
-                    Some(&(_, _, since, fired)) => {
-                        if action.repeats() && now - since >= REPEAT_DELAY && now - fired >= REPEAT_EVERY {
+                    Some(&(_, _, since, fired)) => match repeat_due(since, fired, now).filter(|_| action.repeats()) {
+                        Some(next) => {
                             out.push(action);
-                            still_held.push((id, b, since, now));
-                        } else {
-                            still_held.push((id, b, since, fired));
+                            still_held.push((id, b, since, next));
                         }
-                    }
+                        None => still_held.push((id, b, since, fired)),
+                    },
                 }
             }
         }
@@ -314,6 +416,23 @@ impl Joysticks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeats_keep_an_even_beat_and_speed_up() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        // Nothing before the delay; the first repeat lands on it.
+        assert_eq!(repeat_due(t0, t0, ms(399)), None);
+        assert_eq!(repeat_due(t0, t0, ms(405)), Some(ms(400)));
+        // Then every 90 ms from the last beat, not from when the frame came.
+        assert_eq!(repeat_due(t0, ms(400), ms(489)), None);
+        assert_eq!(repeat_due(t0, ms(400), ms(495)), Some(ms(490)));
+        // Faster after 1.5 s and 3 s.
+        assert_eq!(repeat_due(t0, ms(1600), ms(1655)), Some(ms(1655)));
+        assert_eq!(repeat_due(t0, ms(3100), ms(3135)), Some(ms(3135)));
+        // After a long stall it restarts from now instead of bursting.
+        assert_eq!(repeat_due(t0, ms(400), ms(900)), Some(ms(900)));
+    }
 
     fn f(index: i64, name: &str, key: Option<i64>, joy: Option<i64>) -> Function {
         Function { index, name: name.into(), key, joy_button: joy, active: true }

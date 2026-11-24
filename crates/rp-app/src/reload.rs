@@ -179,11 +179,13 @@ impl App {
             }
             let a = self.aside.take().expect("checked above");
             log::info!("{} has closed: menu back", a.name);
+            self.lib.forget_media();
             self.dof.suspend(false);
             self.dof_shown = None;
             if let Some(g) = self.gfx.as_mut() {
                 for (o, visible) in g.outs.iter().zip(&a.visible) {
                     o.window.set_visible(*visible);
+                    o.dirty.set(true);
                     let _ = o.player.set_pause(false);
                 }
             }
