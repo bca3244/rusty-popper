@@ -68,6 +68,8 @@ impl App {
         for ((screen, window), surface) in order.into_iter().zip(windows).zip(surfaces) {
             context.make_current(&surface)?;
             // Only the playfield waits for vsync, so three swaps don't triple the frame time.
+            // (The interval belongs to the shared context, so frame() sets it again
+            // before each swap; this is just the starting state.)
             let interval = if screen.slot == Slot::PlayField { SwapInterval::Wait(NonZeroU32::new(1).unwrap()) } else { SwapInterval::DontWait };
             let _ = surface.set_swap_interval(&context, interval);
             let audio = screen.slot == Slot::PlayField;
@@ -136,6 +138,9 @@ impl App {
             }
         }
         context.make_current(&outs[0].surface)?;
+        let refresh = outs[0].window.current_monitor().and_then(|m| m.refresh_rate_millihertz());
+        let frame_period = refresh.filter(|&mhz| mhz >= 20_000).map_or(MIN_FRAME, |mhz| Duration::from_micros(1_000_000_000 / mhz as u64));
+        log::info!("Playfield refresh: {}", refresh.map_or("unknown".into(), |mhz| format!("{:.2} Hz", mhz as f32 / 1000.0)));
         let now = Instant::now();
         let mut gfx = Gfx {
             pf_hwnd: hwnd_of(&outs[0].window),
@@ -154,6 +159,8 @@ impl App {
             t0: now,
             last: now,
             perf: perf::Frames::new(),
+            vsync_on: None,
+            frame_period,
         };
         // Load logos nearest the starting game first.
         gfx.load_logos(&self.lib.items, self.start);
@@ -371,6 +378,12 @@ impl App {
             o.dirty.set(false);
             o.drawn_at.set(Instant::now());
             g.context.make_current(&o.surface)?;
+            if g.vsync_on != Some(false) {
+                g.vsync_on = Some(false);
+                if let Err(e) = o.surface.set_swap_interval(&g.context, SwapInterval::DontWait) {
+                    log::warn!("Turning vsync off for {:?}: {e}", o.screen.slot);
+                }
+            }
             let card = self.card.as_ref().filter(|c| c.out == i);
             if o.target.is_some() || card.is_some() {
                 g.canvas.set_size(o.screen.width as u32, o.screen.height as u32, 1.0);
@@ -437,6 +450,12 @@ impl App {
         g.canvas.flush();
         g.perf.part("playfield draw");
         let busy = frame_start.elapsed();
+        if g.vsync_on != Some(true) {
+            g.vsync_on = Some(true);
+            if let Err(e) = pf.surface.set_swap_interval(&g.context, SwapInterval::Wait(NonZeroU32::new(1).unwrap())) {
+                log::warn!("Turning vsync on for the playfield: {e}");
+            }
+        }
         pf.surface.swap_buffers(&g.context)?;
         pf.dirty.set(false);
         g.perf.end(busy);
@@ -456,8 +475,11 @@ impl App {
         if self.deadline.is_some_and(|d| Instant::now() >= d) {
             el.exit();
         }
-        // Normally the swap above waits for vsync; if it didn't, don't spin.
-        if let Some(short) = MIN_FRAME.checked_sub(frame_start.elapsed()) {
+        // Normally the swap above waits for vsync. If the driver ignores it,
+        // don't draw faster than the screen can show (less a little slack,
+        // so a working vsync is never missed because of this).
+        let pace = g.frame_period.saturating_sub(Duration::from_millis(1)).max(MIN_FRAME);
+        if let Some(short) = pace.checked_sub(frame_start.elapsed()) {
             std::thread::sleep(short);
         }
         Ok(())

@@ -543,6 +543,13 @@ struct Gfx {
     t0: Instant,
     last: Instant,
     perf: perf::Frames,
+    /// Whether the shared context's swap interval is set to wait for vsync
+    /// (None: unknown). It's per context, not per window, so it is switched
+    /// on just for the playfield's swap and off for the other screens'.
+    vsync_on: Option<bool>,
+    /// The playfield's refresh period: frames are never shorter than this,
+    /// even if the driver ignores vsync.
+    frame_period: Duration,
     /// The playfield window's handle, for taking the focus back.
     pf_hwnd: isize,
     gl: glow::Context,

@@ -242,6 +242,8 @@ impl App {
     pub(crate) fn render_launching(&mut self, index: usize, phase: rp_launch::Phase, launching: bool, t: f32) -> Result<()> {
         let ui_rotation = self.ui_rotation();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
+        // This screen's swaps leave the swap interval as it was set last.
+        g.vsync_on = None;
         let item = &self.lib.items[index];
         let keep = item.keep_displays();
         for o in g.outs.iter_mut() {
