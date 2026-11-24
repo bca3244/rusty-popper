@@ -49,12 +49,12 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # Menu sound effects, from Popper's PUPVideos\PinUpMenu\PuPSounds (fx_*.wav).
 # Also in the app: Exit -> Options.
 # enabled = true
-# volume = 70
+# volume = 30
 # dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'
 # Play the selected game's Audio media (POPMedia\<emulator>\Audio\<game>.mp3)
 # once the wheel rests on it for a moment.
 # game_audio = true
-# game_audio_volume = 80
+# game_audio_volume = 50
 
 [update]
 # Look for a newer release on GitHub at startup; install from Exit -> Options.

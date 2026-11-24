@@ -34,7 +34,7 @@
 //!
 //! [sound]
 //! enabled = true    # menu sound effects (Popper's PinUpMenu sounds)
-//! volume = 70
+//! volume = 30
 //! # dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'
 //! ```
 
@@ -169,11 +169,11 @@ pub struct SoundSettings {
 }
 
 fn default_game_audio_volume() -> i32 {
-    80
+    50
 }
 
 fn default_sound_volume() -> i32 {
-    70
+    30
 }
 
 impl Default for SoundSettings {
