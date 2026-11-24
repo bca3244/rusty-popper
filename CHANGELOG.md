@@ -5,7 +5,7 @@ All notable changes to Rusty Popper. Versions follow the GitHub [releases](https
 ## [0.2.26] - 2026-11-24
 
 ### Changed
-- New defaults for a fresh install: menu sound effects at 30 (was 70) and game audio at 50 (was 80). A `rusty-popper.toml` that already sets these volumes keeps its own values.
+- New defaults for a fresh install: video volume at 50 (was 100, set in the starter `rusty-popper.toml` in the download), menu sound effects at 30 (was 70) and game audio at 50 (was 80). A `rusty-popper.toml` that already sets these volumes keeps its own values.
 
 ## [0.2.25] - 2026-11-23
 
