@@ -90,14 +90,26 @@ pub struct Pacer {
     unpaced: bool,
     window_start: Instant,
     frames: u32,
-    /// When the next frame may start (only while `unpaced`).
+    /// When the next frame may start (only while `unpaced`, sleeping).
     next: Instant,
+    /// Whether waiting for the compositor (DwmFlush) paces frames.
+    dwm_ok: bool,
+    dwm_frames: u32,
+    dwm_since: Instant,
 }
+
+#[cfg(windows)]
+fn dwm_flush() {
+    unsafe { windows_sys::Win32::Graphics::Dwm::DwmFlush() };
+}
+
+#[cfg(not(windows))]
+fn dwm_flush() {}
 
 impl Pacer {
     pub fn new() -> Pacer {
         let now = Instant::now();
-        Pacer { unpaced: false, window_start: now, frames: 0, next: now }
+        Pacer { unpaced: false, window_start: now, frames: 0, next: now, dwm_ok: true, dwm_frames: 0, dwm_since: now }
     }
 
     /// Call right after the playfield's swap.
@@ -126,8 +138,28 @@ impl Pacer {
             std::thread::sleep(Duration::from_millis(1));
             return;
         }
-        // A steady beat of one frame per refresh; after a slow frame, start
-        // again from now rather than rushing to catch up.
+        // Wait for the desktop compositor's next frame: a kernel wait that
+        // lines frames up with the display. If that doesn't hold frames back
+        // either, keep a steady beat of one frame per refresh by sleeping;
+        // after a slow frame, start again from now rather than catching up.
+        if self.dwm_ok {
+            dwm_flush();
+            let now = Instant::now();
+            self.dwm_frames += 1;
+            if self.dwm_frames == 1 {
+                self.dwm_since = now;
+            } else if now - self.dwm_since >= Duration::from_secs(2) {
+                let expected = (now - self.dwm_since).as_secs_f64() / period.as_secs_f64();
+                if f64::from(self.dwm_frames - 1) > expected * 1.1 {
+                    log::info!("perf: waiting for the compositor doesn't pace frames either; sleeping instead");
+                    self.dwm_ok = false;
+                    self.next = now;
+                }
+                self.dwm_frames = 1;
+                self.dwm_since = now;
+            }
+            return;
+        }
         self.next += period;
         if self.next > now {
             std::thread::sleep(self.next - now);
