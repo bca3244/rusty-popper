@@ -2,7 +2,7 @@
 //!
 //! ```toml
 //! [wheel]
-//! style = "arc"   # or "flow"
+//! style = "arc"   # or "flow", "minimal" or "vertical"
 //!
 //! [playfield]
 //! ui_rotation = 270   # default: Popper's ThumbRotate
@@ -47,13 +47,38 @@ pub enum WheelStyle {
     #[default]
     Arc,
     Flow,
+    Minimal,
+    Vertical,
 }
 
 impl WheelStyle {
+    /// The next style in the Options cycle.
     pub fn toggled(self) -> Self {
         match self {
             WheelStyle::Arc => WheelStyle::Flow,
-            WheelStyle::Flow => WheelStyle::Arc,
+            WheelStyle::Flow => WheelStyle::Minimal,
+            WheelStyle::Minimal => WheelStyle::Vertical,
+            WheelStyle::Vertical => WheelStyle::Arc,
+        }
+    }
+
+    /// The name in rusty-popper.toml.
+    pub fn key(self) -> &'static str {
+        match self {
+            WheelStyle::Arc => "arc",
+            WheelStyle::Flow => "flow",
+            WheelStyle::Minimal => "minimal",
+            WheelStyle::Vertical => "vertical",
+        }
+    }
+
+    /// The name in Options.
+    pub fn label(self) -> &'static str {
+        match self {
+            WheelStyle::Arc => "Arc",
+            WheelStyle::Flow => "Cover flow",
+            WheelStyle::Minimal => "Minimal",
+            WheelStyle::Vertical => "Vertical",
         }
     }
 
@@ -61,6 +86,8 @@ impl WheelStyle {
         match s.to_ascii_lowercase().as_str() {
             "arc" => Some(WheelStyle::Arc),
             "flow" => Some(WheelStyle::Flow),
+            "minimal" => Some(WheelStyle::Minimal),
+            "vertical" => Some(WheelStyle::Vertical),
             _ => None,
         }
     }
@@ -294,7 +321,7 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
         }
         doc[table][key] = value(val);
     };
-    set("wheel", "style", (if v.style == WheelStyle::Arc { "arc" } else { "flow" }).into());
+    set("wheel", "style", v.style.key().into());
     set("attract", "enabled", v.attract_enabled.into());
     set("attract", "idle_secs", (v.attract_idle_secs as i64).into());
     set("attract", "interval_secs", (v.attract_interval_secs as i64).into());
@@ -388,5 +415,19 @@ mod tests {
         assert!(!s.attract.enabled);
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
         assert!(s.dof.enabled);
+    }
+
+    #[test]
+    fn every_wheel_style_round_trips() {
+        let mut style = WheelStyle::Arc;
+        for _ in 0..4 {
+            assert_eq!(WheelStyle::parse(style.key()), Some(style));
+            let v = Editable { style, attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false };
+            let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap()).unwrap();
+            assert_eq!(s.wheel.style, style);
+            style = style.toggled();
+        }
+        assert_eq!(style, WheelStyle::Arc, "the Options cycle visits all four styles");
+        assert_eq!(Settings::parse("[wheel]\nstyle = \"vertical\"\n").unwrap().wheel.style, WheelStyle::Vertical);
     }
 }

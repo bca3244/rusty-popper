@@ -17,7 +17,6 @@ impl App {
         if let Some(&item) = self.view.get(pos) {
             if item != g.shown {
                 g.shown = item;
-                g.swapped_at = (Instant::now() - g.t0).as_secs_f64();
                 for o in &g.outs {
                     o.show(self.lib.items[item].media(o.screen.slot).as_deref());
                 }
@@ -149,7 +148,7 @@ impl App {
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
         vec![
-            format!("Wheel style: {}", if self.style == WheelStyle::Arc { "Arc" } else { "Cover flow" }),
+            format!("Wheel style: {}", self.style.label()),
             "Attract mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
             format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),

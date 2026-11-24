@@ -101,7 +101,6 @@ impl App {
         let item = self.view.get(pos).copied().unwrap_or(0);
         if !same_items || (!same_view && item != g.shown) {
             g.shown = item;
-            g.swapped_at = (Instant::now() - g.t0).as_secs_f64();
             for o in g.outs.iter_mut() {
                 o.slide = None;
                 o.show(self.lib.items[item].media(o.screen.slot).as_deref());
