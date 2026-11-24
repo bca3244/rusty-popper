@@ -177,6 +177,11 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.28]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.28
+[0.2.27]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.27
+[0.2.26]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.26
+[0.2.25]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.25
+[0.2.24]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.24
 [0.2.23]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.23
 [0.2.22]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.22
 [0.2.21]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.21

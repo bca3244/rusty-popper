@@ -13,6 +13,8 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 - **Launches through Popper's scripts:** VPX, Future Pinball and others start exactly as they do in Popper. "Launching" and "Exiting" screens mean the desktop never shows.
 - **Playlists as wheels:** Popper's playlists sit on the wheel where it wraps from the last game back to the first.
 - **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, **menu sounds** from Popper's own sound set, and each game's **Audio media** once the wheel rests on it.
+- **DOF (optional):** cabinet lights, flashers and shakers react to the menu, using your existing DOF config for Popper's menu.
+- **Works alongside VPin Studio:** hides and pauses while a table started elsewhere is on screen, so media recordings stay clean.
 - **Play statistics** written back to Popper, so "Most Played" keeps working.
 - **Updates itself:** it tells you when a new release is out and installs it from the Options menu, and goes back to the previous version if the new one won't start.
 
@@ -63,11 +65,11 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart computer* and *Shut down computer*. It always opens on *Back to games*, so a stray press can't power anything off.
 
-**Options** (Exit → Options) change things on the spot and save them:
+**Options** (Exit → Options) change things on the spot and save them. A fresh install starts with the arc wheel, attract mode after 3 minutes idle (12 seconds per game), video volume 50, sound effects 30 and game audio 50.
 
 - Wheel style (arc or cover flow)
 - **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
-- **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume (*Back* in either submenu returns to Options)
+- **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume. Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
 - Install update / check for updates
 
@@ -154,22 +156,33 @@ The exe is a windowed program, so a terminal doesn't wait for it. Use `start /wa
 - **2D and text:** `femtovg`
 - **Database:** `rusqlite`, reading a consistent snapshot of `PUPDatabase.db`
 - **Input:** Popper's own key and joystick setup (`PinUPFunctions`), read through winit and winmm
+- **Sound:** menu effects mixed on their own thread into a `waveOut` stream; game audio through libmpv
+- **DOF:** COM late binding (`IDispatch`) via the `windows` crate
 - **Updates:** `ureq` (rustls) against the GitHub releases API, `sha2` to verify, `zip` to unpack
 
 ```
 crates/
   rp-app/     binary: rusty-popper
-    main.rs      startup, arguments, the event loop
-    render.rs    windows, GL, players, drawing a frame of the menu
-    menu.rs      what the buttons do: browsing, playlists, cards, exit/options, attract mode
-    session.rs   a game session: launch, the Launching/Exiting screens, the exit button
-    reload.rs    following database changes, keeping the keyboard focus
-    library.rs   games and playlists as read from Popper
-    wheel.rs     the arc wheel and cover flow
-    discover.rs  finding Popper
-    overlay.rs   Game Info / Help cards
-    sfx.rs       menu sounds
-    updater.rs   update check, install and rollback
+    main.rs       startup, arguments, the event loop
+    render.rs     windows, GL, players, drawing a frame of the menu
+    menu.rs       what the buttons do: browsing, playlists, cards, exit/options, attract mode
+    input.rs      keyboard and joystick, mapped from Popper's controller setup
+    session.rs    a game session: launch, the Launching/Exiting screens, the exit button
+    reload.rs     following database changes, keeping the keyboard focus
+    library.rs    games and playlists as read from Popper
+    wheel.rs      the arc wheel and cover flow
+    video.rs      offscreen video targets and the cover-flow slide
+    mpv.rs        minimal libmpv binding, loaded at run time
+    assets.rs     background loading of wheel logos
+    discover.rs   finding Popper
+    settings.rs   rusty-popper.toml
+    overlay.rs    Game Info / Help cards
+    sfx.rs        menu sounds
+    gameaudio.rs  game audio on the wheel
+    dof.rs        optional DOF output
+    errscreen.rs  the full-screen "couldn't start" notice
+    updater.rs    update check, install and rollback
+    win.rs, logging.rs  Win32 helpers, rusty-popper.log
   rp-db/      PUPDatabase.db access
   rp-config/  PinUpPlayer.ini and POPMedia path resolution
   rp-launch/  emulator launch/post scripts, process tracking
