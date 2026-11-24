@@ -179,13 +179,16 @@ impl App {
             }
             let a = self.aside.take().expect("checked above");
             log::info!("{} has closed: menu back", a.name);
+            self.lib.forget_media();
             self.dof.suspend(false);
             self.dof_shown = None;
             if let Some(g) = self.gfx.as_mut() {
                 for (o, visible) in g.outs.iter().zip(&a.visible) {
                     o.window.set_visible(*visible);
+                    o.dirty.set(true);
                     let _ = o.player.set_pause(false);
                 }
+                g.load_logos(&self.lib.items, g.shown);
             }
             self.last_input = now;
             self.attract_on = false;
@@ -210,6 +213,9 @@ impl App {
             let _ = o.player.set_pause(true);
             o.window.set_visible(false);
         }
+        // Nothing uploads logos while aside: stop loading them until back.
+        g.logos = assets::idle();
+        self.key_repeat.clear();
         self.aside = Some(Aside { pid, name, visible });
         // That table's DOF needs the hardware too.
         self.dof.suspend(true);

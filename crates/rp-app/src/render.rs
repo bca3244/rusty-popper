@@ -9,6 +9,7 @@ impl App {
     }
 
     pub(crate) fn init(&mut self, el: &ActiveEventLoop) -> Result<()> {
+        let init_start = Instant::now();
         // Start in the last playlist used (if it still exists), on the --game
         // match or that playlist's first game.
         let last = std::fs::read_to_string(state_path()).unwrap_or_default();
@@ -67,6 +68,8 @@ impl App {
         for ((screen, window), surface) in order.into_iter().zip(windows).zip(surfaces) {
             context.make_current(&surface)?;
             // Only the playfield waits for vsync, so three swaps don't triple the frame time.
+            // (The interval belongs to the shared context, so frame() sets it again
+            // before each swap; this is just the starting state.)
             let interval = if screen.slot == Slot::PlayField { SwapInterval::Wait(NonZeroU32::new(1).unwrap()) } else { SwapInterval::DontWait };
             let _ = surface.set_swap_interval(&context, interval);
             let audio = screen.slot == Slot::PlayField;
@@ -82,10 +85,28 @@ impl App {
                 ("aid", if audio { "auto" } else { "no" }.to_string()),
                 ("volume", if screen.slot == Slot::PlayField { self.volume } else { screen.volume }.to_string()),
             ];
-            let mut player = self.mpv.player(&opts).with_context(|| format!("{:?}", screen.slot))?;
+            // Don't scan each video's folder for subtitles, audio tracks or cover art.
+            let optional = [("sub-auto", "no"), ("audio-file-auto", "no"), ("cover-art-auto", "no")];
+            let mut player = self.mpv.player(&opts, &optional).with_context(|| format!("{:?}", screen.slot))?;
             player.init_gl(&loader)?;
             window.set_cursor_visible(false);
-            let out = ScreenOut { screen, window, surface, player, target: None, slide: None, file_loaded: Cell::new(false) };
+            let out = ScreenOut {
+                screen,
+                window,
+                surface,
+                player,
+                target: None,
+                slide: None,
+                file_loaded: Cell::new(false),
+                load_tag: Cell::new(0),
+                load_acked: Cell::new(false),
+                wants_video: Cell::new(false),
+                loaded_at: Cell::new(None),
+                hwdec_logged: Cell::new(false),
+                dirty: Cell::new(true),
+                drawn_at: Cell::new(Instant::now()),
+                had_card: Cell::new(false),
+            };
             out.load(start_item.media(out.screen.slot).as_deref());
             outs.push(out);
         }
@@ -117,6 +138,9 @@ impl App {
             }
         }
         context.make_current(&outs[0].surface)?;
+        let refresh = outs[0].window.current_monitor().and_then(|m| m.refresh_rate_millihertz());
+        let frame_period = refresh.filter(|&mhz| mhz >= 20_000).map_or(MIN_FRAME, |mhz| Duration::from_micros(1_000_000_000 / mhz as u64));
+        log::info!("Playfield refresh: {}", refresh.map_or("unknown".into(), |mhz| format!("{:.2} Hz", mhz as f32 / 1000.0)));
         let now = Instant::now();
         let mut gfx = Gfx {
             pf_hwnd: hwnd_of(&outs[0].window),
@@ -134,9 +158,14 @@ impl App {
             shown: self.start,
             t0: now,
             last: now,
+            perf: perf::Frames::new(),
+            vsync_on: None,
+            frame_period,
+            pacer: perf::Pacer::new(),
         };
         // Load logos nearest the starting game first.
         gfx.load_logos(&self.lib.items, self.start);
+        perf::note("Creating windows and players", init_start, 500);
         log::info!("Joysticks found: {}", gfx.joysticks.count());
         self.gfx = Some(gfx);
         Ok(())
@@ -169,8 +198,10 @@ impl App {
                     g.joysticks.swallow_held(&self.bindings);
                 }
                 g.joysticks.poll(&self.bindings, &mut actions);
+                self.key_repeat.tick(&mut actions);
             } else {
                 self.joy_blocked = true;
+                self.key_repeat.clear();
             }
         }
         for a in actions {
@@ -225,7 +256,8 @@ impl App {
         let option_labels = match self.menu.as_ref().map(|m| m.kind) {
             Some(MenuKind::Sound) => self.sound_labels(),
             Some(MenuKind::Attract) => self.attract_labels(),
-            _ => self.option_labels(),
+            Some(MenuKind::Options) => self.option_labels(),
+            Some(MenuKind::Exit) | None => Vec::new(),
         };
         let ui_rotation = self.ui_rotation();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
@@ -234,10 +266,15 @@ impl App {
         let dt = (now_i - g.last).as_secs_f32().min(0.05);
         g.last = now_i;
         let now = (now_i - g.t0).as_secs_f64();
+        g.perf.start(frame_start);
+        g.perf.part("input");
 
-        // Upload any logos the loader finished (a few per frame to avoid hitches).
+        // Upload any logos the loader finished, within a small time budget
+        // per frame so loading never costs a dropped frame.
         g.context.make_current(&g.outs[0].surface)?;
-        for logo in g.logos.try_iter().take(4) {
+        let upload_start = Instant::now();
+        while upload_start.elapsed() < LOGO_UPLOAD_BUDGET {
+            let Some(logo) = g.logos.try_recv() else { break };
             let upload = |c: &mut Canvas<OpenGl>, img: &image::RgbaImage| {
                 use femtovg::rgb::FromSlice;
                 let (w, h) = img.dimensions();
@@ -254,14 +291,16 @@ impl App {
             }
         }
 
+        g.perf.part("logo uploads");
         g.wheel.update(dt, now);
-        // Swap media once the selection has rested for a moment. Cover flow
-        // swaps at once on a step after a pause long enough for the last slide
-        // to finish, so the screens move with the wheel; fast scrolling waits.
+        // Swap media at once on a step after a pause (long enough for a Cover
+        // flow slide to finish), so a single press loads straight away; while
+        // scrolling fast, wait until the selection rests for a moment.
         let sel = self.view.get(g.wheel.selected()).copied().unwrap_or(g.shown);
+        g.logos.set_near(sel);
         let settled = now - g.wheel.changed_at >= wheel::MEDIA_DEBOUNCE as f64;
         let paused = g.wheel.gap >= (wheel::MEDIA_DEBOUNCE + video::SLIDE_SECS) as f64;
-        if sel != g.shown && (settled || (style == WheelStyle::Flow && paused)) {
+        if sel != g.shown && (settled || paused) {
             g.shown = sel;
             let item = &self.lib.items[sel];
             let slide = style == WheelStyle::Flow;
@@ -285,22 +324,72 @@ impl App {
                 el.exit();
             }
         }
+        g.perf.part("media swap");
+
+        // Which screens need presenting this frame. The playfield always does
+        // (the wheel moves), but mpv only draws into its texture when there's
+        // a new video frame; a secondary screen is presented only when its
+        // video has a new frame or something on it changed. Either way there's
+        // a redraw every second as a backstop.
+        video::reset_for_mpv(&g.gl);
+        let card_out = self.card.as_ref().map(|c| c.out);
+        let present: Vec<(bool, bool)> = g
+            .outs
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                let fresh = o.player.has_new_frame();
+                let card_here = card_out == Some(i);
+                let card_changed = o.had_card.replace(card_here) != card_here;
+                let stale = o.drawn_at.get().elapsed() >= REDRAW_EVERY;
+                let render_video = fresh || o.dirty.get() || stale || o.target.is_none();
+                let present = i == 0 || fresh || o.dirty.get() || stale || card_here || card_changed || o.slide.is_some();
+                (render_video && (i == 0 || present), present)
+            })
+            .collect();
 
         // Pass 1: every screen's video into its offscreen texture (all mpv work
-        // first, with GL state reset, since femtovg's state upsets mpv).
-        for o in &g.outs {
-            g.context.make_current(&o.surface)?;
-            video::reset_for_mpv(&g.gl);
+        // first, with GL state reset, since femtovg's state upsets mpv). The
+        // textures belong to the one shared context, so only a screen without
+        // one needs its own surface current.
+        for (i, (o, &(render_video, _))) in g.outs.iter().zip(&present).enumerate() {
+            if !render_video {
+                continue;
+            }
+            if i == 0 {
+                // The playfield is presented every frame; this times its video.
+                o.drawn_at.set(Instant::now());
+            }
             match &o.target {
-                Some(t) => o.player.render_to(t.fbo_id(), o.screen.width, o.screen.height),
-                None => o.player.render(o.screen.width, o.screen.height),
+                Some(t) => {
+                    video::reset_for_mpv(&g.gl);
+                    o.player.render_to(t.fbo_id(), o.screen.width, o.screen.height);
+                }
+                None => {
+                    g.context.make_current(&o.surface)?;
+                    video::reset_for_mpv(&g.gl);
+                    o.player.render(o.screen.width, o.screen.height);
+                    g.context.make_current(&g.outs[0].surface)?;
+                }
             }
         }
+        g.perf.part("video render");
         // Pass 2: composite. The slide runs along the player's left/right: on
         // the playfield that's the menu's rotated x axis, elsewhere screen x.
         let pf_rot = (g.outs[0].screen.rotation + ui_rotation).rem_euclid(360);
         for (i, o) in g.outs.iter_mut().enumerate().skip(1) {
+            if !present[i].1 {
+                continue;
+            }
+            o.dirty.set(false);
+            o.drawn_at.set(Instant::now());
             g.context.make_current(&o.surface)?;
+            if g.vsync_on != Some(false) {
+                g.vsync_on = Some(false);
+                if let Err(e) = o.surface.set_swap_interval(&g.context, SwapInterval::DontWait) {
+                    log::warn!("Turning vsync off for {:?}: {e}", o.screen.slot);
+                }
+            }
             let card = self.card.as_ref().filter(|c| c.out == i);
             if o.target.is_some() || card.is_some() {
                 g.canvas.set_size(o.screen.width as u32, o.screen.height as u32, 1.0);
@@ -315,6 +404,7 @@ impl App {
             }
             o.surface.swap_buffers(&g.context)?;
         }
+        g.perf.part("other screens");
         // Playfield: video, then the wheel on top, then present (waits for vsync).
         let (w, h) = (g.outs[0].screen.width, g.outs[0].screen.height);
         g.context.make_current(&g.outs[0].surface)?;
@@ -364,10 +454,23 @@ impl App {
         }
         g.canvas.restore();
         g.canvas.flush();
+        g.perf.part("playfield draw");
+        let busy = frame_start.elapsed();
+        if g.vsync_on != Some(true) {
+            g.vsync_on = Some(true);
+            if let Err(e) = pf.surface.set_swap_interval(&g.context, SwapInterval::Wait(NonZeroU32::new(1).unwrap())) {
+                log::warn!("Turning vsync on for the playfield: {e}");
+            }
+        }
         pf.surface.swap_buffers(&g.context)?;
+        pf.dirty.set(false);
+        g.perf.end(busy);
         if !g.revealed {
             // Every screen has a frame now: show them (secondaries only with media).
             g.revealed = true;
+            if let Some(t) = STARTED.get() {
+                log::info!("perf: first frame {} ms after start", t.elapsed().as_millis());
+            }
             let item = &self.lib.items[g.shown];
             for o in &g.outs {
                 o.window.set_visible(o.screen.slot == Slot::PlayField || item.media(o.screen.slot).is_some());
@@ -378,10 +481,9 @@ impl App {
         if self.deadline.is_some_and(|d| Instant::now() >= d) {
             el.exit();
         }
-        // Normally the swap above waits for vsync; if it didn't, don't spin.
-        if let Some(short) = MIN_FRAME.checked_sub(frame_start.elapsed()) {
-            std::thread::sleep(short);
-        }
+        // Normally the swap above waits for vsync. If the driver ignores it
+        // (seen on the cabinet), pace frames to the refresh rate ourselves.
+        g.pacer.after_swap(g.frame_period);
         Ok(())
     }
 

@@ -2,6 +2,30 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.30] - 2026-11-24
+
+Speed and responsiveness, from a performance review of v0.2.29.
+
+### Changed
+- **Faster exits**: the menu comes back about a second sooner after a game closes. The long wait for a launcher hand-off now only applies in a game's first 20 seconds or so.
+- **Faster media on a single step**: in every wheel style, one press now starts loading the new game's videos at once. Before, Arc, Minimal and Vertical always waited 160 ms first. Fast scrolling still waits for the wheel to rest.
+- **Smoother holding of a flipper**: the repeat keeps an even beat and speeds up the longer the button is held (about 11 games a second, then 18 after 1.5 s, then 28 after 3 s), and the wheel keeps up more closely with the selection, stiffening when it falls behind. Keyboard browsing keys now repeat on the same beat as joystick buttons, whatever the Windows key-repeat setting.
+- **Vsync on the playfield actually works now**: the swap interval belongs to the one shared OpenGL context, so turning it off for the other screens also turned it off for the playfield, and the menu drew about 230 frames a second. It is now switched on just for the playfield's swap. If the driver still doesn't wait for vsync (as on the test cabinet), the menu notices within a second and paces its frames itself, waiting for the desktop compositor's next frame (or sleeping to the refresh rate if that doesn't hold them back). On the 144 Hz test cabinet the menu now draws 144 frames a second instead of about 230. This frees a lot of GPU time.
+- Switching videos no longer waits on mpv, and mpv no longer looks through each media folder for subtitle, audio or cover-art files.
+- mpv no longer pauses the menu while waiting for a video frame's display time.
+- Backglass, DMD, FullDMD and topper screens are only redrawn when their video has a new frame or something on them changed, with a redraw every second anyway. This cuts GPU work, mostly for still images and 30 fps videos. The playfield video, too, is only drawn into its texture when it has a new frame, instead of on every menu frame.
+- Fewer OpenGL context switches per frame.
+- Wheel logos load on up to two low-priority threads, always nearest the current selection first (also after a letter jump), and are turned into textures within a small time budget per frame.
+- Media file lookups are remembered per game instead of checking the disk on every step. They are refreshed after each game and after another program's table closes.
+- The playfield video stops decoding while the Launching screen covers it, so the table loads with less competition. Its audio keeps playing.
+- The joystick rescan runs on a helper thread, so a slow winmm query can't hold up a frame.
+- libmpv loads while Popper's database is read, and the window icon is decoded once instead of once per screen.
+- Cover flow draws fewer strips for the outer covers and skips reflections too faint to see.
+- Release builds use thin LTO and a single codegen unit.
+
+### Added
+- Timing notes in `rusty-popper.log`, written only when something is slow: frames over 25 ms (a summary once a minute, naming the slowest part), media switches over 300 ms, a slow database read, libmpv or window setup, and the time to the first frame. Each screen's video decoder (`hwdec=...`) is logged once, which shows whether hardware decoding is in use.
+
 ## [0.2.29] - 2026-11-24
 
 ### Added

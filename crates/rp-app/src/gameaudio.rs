@@ -44,7 +44,7 @@ impl GameAudio {
             ("loop-file", "inf".to_string()),
             ("volume", volume.to_string()),
         ];
-        let player = mpv.player(&opts).map_err(|e| log::warn!("Game audio player: {e:#}; game audio off")).ok();
+        let player = mpv.player(&opts, &[("sub-auto", "no"), ("cover-art-auto", "no")]).map_err(|e| log::warn!("Game audio player: {e:#}; game audio off")).ok();
         GameAudio { player, enabled, volume, want: None, tried: false, playing: false }
     }
 
@@ -65,7 +65,7 @@ impl GameAudio {
         self.tried = true;
         if let (Some(p), Some(file)) = (&self.player, audio_of(item)) {
             match p.show(Some(&file)) {
-                Ok(()) => self.playing = true,
+                Ok(_) => self.playing = true,
                 Err(e) => log::warn!("Game audio {}: {e:#}", file.display()),
             }
         }

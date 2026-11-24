@@ -127,6 +127,8 @@ impl App {
             return;
         }
         let Some(g) = self.gfx.as_mut() else { return };
+        // Keys held now are the game's from here on.
+        self.key_repeat.clear();
         // The table's own DOF needs the hardware: end ours (as Popper does).
         self.dof.suspend(true);
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: (**emu).clone(), game: (**game).clone(), ignore: self.ignore_processes.clone() };
@@ -166,6 +168,11 @@ impl App {
             log::error!("Couldn't start the game thread: {e}");
             return;
         }
+        // The launch screen covers the playfield video: stop decoding it so
+        // the table loads faster (its audio keeps playing).
+        if let Some(pf) = self.gfx.as_ref().map(|g| &g.outs[0]).filter(|o| !emu.keep_displays.contains(&(o.screen.slot as u32))) {
+            let _ = pf.player.command_async(&["set", "vid", "no"]);
+        }
         self.playing = Some(Playing {
             rx,
             ctl,
@@ -203,11 +210,15 @@ impl App {
         // A re-read begun before the statistics were written would be stale.
         self.reload = None;
         self.start_reload();
+        self.lib.forget_media();
         let Some(g) = self.gfx.as_mut() else { return };
         let item = &self.lib.items[g.shown];
         for o in g.outs.iter_mut() {
             o.slide = None;
             let _ = o.player.set_pause(false);
+            if o.screen.slot == Slot::PlayField {
+                let _ = o.player.command_async(&["set", "vid", "auto"]);
+            }
             o.show(item.media(o.screen.slot).as_deref());
         }
         g.load_logos(&self.lib.items, g.shown);
@@ -219,6 +230,7 @@ impl App {
         self.last_reclaim = now;
         // Buttons still held from the game (e.g. Exit) must not fire in the menu.
         g.joysticks.swallow_held(&self.bindings);
+        self.key_repeat.clear();
         self.joy_blocked = false;
         g.last = now;
     }
@@ -230,6 +242,8 @@ impl App {
     pub(crate) fn render_launching(&mut self, index: usize, phase: rp_launch::Phase, launching: bool, t: f32) -> Result<()> {
         let ui_rotation = self.ui_rotation();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
+        // This screen's swaps leave the swap interval as it was set last.
+        g.vsync_on = None;
         let item = &self.lib.items[index];
         let keep = item.keep_displays();
         for o in g.outs.iter_mut() {
