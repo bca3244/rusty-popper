@@ -505,7 +505,13 @@ impl ScreenOut {
             match ev {
                 mpv::EVENT_SHUTDOWN => shutdown = true,
                 mpv::EVENT_COMMAND_REPLY if tag != 0 && tag == self.load_tag.get() => self.load_acked.set(true),
-                mpv::EVENT_FILE_LOADED if self.load_acked.get() => self.file_loaded.set(true),
+                mpv::EVENT_FILE_LOADED if self.load_acked.get() => {
+                    self.file_loaded.set(true);
+                    self.dirty.set(true);
+                }
+                // Draw once more even without a new frame, so a stopped or
+                // reconfigured video doesn't leave its last picture up.
+                mpv::EVENT_END_FILE | mpv::EVENT_VIDEO_RECONFIG => self.dirty.set(true),
                 mpv::EVENT_PLAYBACK_RESTART if self.file_loaded.get() => {
                     if let Some(s) = self.slide.as_mut() {
                         s.video_ready();

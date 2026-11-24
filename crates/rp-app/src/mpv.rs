@@ -55,6 +55,10 @@ pub const EVENT_SHUTDOWN: i32 = 1;
 pub const EVENT_COMMAND_REPLY: i32 = 5;
 /// A newly loaded file is open (its first frame follows with PLAYBACK_RESTART).
 pub const EVENT_FILE_LOADED: i32 = 8;
+/// A file ended or was stopped.
+pub const EVENT_END_FILE: i32 = 7;
+/// The video's size or format changed (or video was turned on or off).
+pub const EVENT_VIDEO_RECONFIG: i32 = 17;
 /// Playback (re)started after loading or seeking: the new file has frames.
 pub const EVENT_PLAYBACK_RESTART: i32 = 21;
 

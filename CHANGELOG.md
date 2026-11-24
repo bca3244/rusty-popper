@@ -13,7 +13,7 @@ Speed and responsiveness, from a performance review of v0.2.29.
 - **Vsync on the playfield actually works now**: the swap interval belongs to the one shared OpenGL context, so turning it off for the other screens also turned it off for the playfield, and the menu drew about 230 frames a second. It is now switched on just for the playfield's swap. If the driver still doesn't wait for vsync (as on some setups), the menu notices within a second and paces its frames to the playfield's refresh rate itself. This frees a lot of GPU time.
 - Switching videos no longer waits on mpv, and mpv no longer looks through each media folder for subtitle, audio or cover-art files.
 - mpv no longer pauses the menu while waiting for a video frame's display time.
-- Backglass, DMD, FullDMD and topper screens are only redrawn when their video has a new frame or something on them changed, with a redraw every second anyway. This cuts GPU work, mostly for still images and 30 fps videos.
+- Backglass, DMD, FullDMD and topper screens are only redrawn when their video has a new frame or something on them changed, with a redraw every second anyway. This cuts GPU work, mostly for still images and 30 fps videos. The playfield video, too, is only drawn into its texture when it has a new frame, instead of on every menu frame.
 - Fewer OpenGL context switches per frame.
 - Wheel logos load on up to two low-priority threads, always nearest the current selection first (also after a letter jump), and are turned into textures within a small time budget per frame.
 - Media file lookups are remembered per game instead of checking the disk on every step. They are refreshed after each game and after another program's table closes.

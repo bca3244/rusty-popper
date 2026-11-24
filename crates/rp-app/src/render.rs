@@ -327,9 +327,10 @@ impl App {
         g.perf.part("media swap");
 
         // Which screens need presenting this frame. The playfield always does
-        // (the wheel moves) and its video is drawn every frame; a secondary
-        // screen only when its video has a new frame or something on it
-        // changed, with a redraw every second anyway.
+        // (the wheel moves), but mpv only draws into its texture when there's
+        // a new video frame; a secondary screen is presented only when its
+        // video has a new frame or something on it changed. Either way there's
+        // a redraw every second as a backstop.
         video::reset_for_mpv(&g.gl);
         let card_out = self.card.as_ref().map(|c| c.out);
         let present: Vec<(bool, bool)> = g
@@ -351,9 +352,13 @@ impl App {
         // first, with GL state reset, since femtovg's state upsets mpv). The
         // textures belong to the one shared context, so only a screen without
         // one needs its own surface current.
-        for (o, &(render_video, _)) in g.outs.iter().zip(&present) {
+        for (i, (o, &(render_video, _))) in g.outs.iter().zip(&present).enumerate() {
             if !render_video {
                 continue;
+            }
+            if i == 0 {
+                // The playfield is presented every frame; this times its video.
+                o.drawn_at.set(Instant::now());
             }
             match &o.target {
                 Some(t) => {
