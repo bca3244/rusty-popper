@@ -210,6 +210,15 @@ impl Default for AttractSettings {
     }
 }
 
+/// `[dof]`: light the cabinet's toys from the menu with DOF, using the DOF
+/// Config Tool's "PinUP Menu" table (ROM pinupmenu), as Popper's menu does.
+#[derive(Debug, Default, Deserialize)]
+pub struct DofSettings {
+    /// Off unless turned on (Options or here).
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -230,6 +239,8 @@ pub struct Settings {
     pub sound: SoundSettings,
     #[serde(default)]
     pub update: UpdateSettings,
+    #[serde(default)]
+    pub dof: DofSettings,
 }
 
 impl Settings {
@@ -269,6 +280,7 @@ pub struct Editable {
     pub sound_volume: i32,
     pub game_audio: bool,
     pub game_audio_volume: i32,
+    pub dof: bool,
 }
 
 /// `text` (the current file contents) with the editable values set, keeping
@@ -291,6 +303,7 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("sound", "volume", (v.sound_volume as i64).into());
     set("sound", "game_audio", v.game_audio.into());
     set("sound", "game_audio_volume", (v.game_audio_volume as i64).into());
+    set("dof", "enabled", v.dof.into());
     Ok(doc.to_string())
 }
 
@@ -344,6 +357,7 @@ mod tests {
         assert_eq!(s.input.menu_joy_buttons, [3]);
         assert!(s.input.joystick_needs_focus && s.input.keyboard_quit);
         assert!(s.attract.enabled);
+        assert!(!s.dof.enabled, "DOF is off by default");
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs), (180, 12));
         assert!(s.launch.ignore_processes.is_empty() && s.paths.popper_dir.is_none());
         assert!(Settings::parse("[wheel\nstyle=").is_err());
@@ -365,7 +379,7 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50 };
+        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
@@ -373,5 +387,6 @@ mod tests {
         assert_eq!(s.playfield.ui_rotation, Some(270));
         assert!(!s.attract.enabled);
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
+        assert!(s.dof.enabled);
     }
 }

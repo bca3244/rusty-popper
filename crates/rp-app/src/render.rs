@@ -181,6 +181,13 @@ impl App {
             return Ok(()); // a button just launched a game
         }
         self.attract_tick();
+        // DOF: a new random effect for each game or playlist the wheel settles on.
+        if let Some(g) = &self.gfx {
+            if self.dof_shown != Some(g.shown) {
+                self.dof_shown = Some(g.shown);
+                self.dof.select();
+            }
+        }
         // The selected game's own audio, once the wheel rests on it (not in attract mode).
         let selected = if self.attract_on { None } else { self.gfx.as_ref().and_then(|g| self.view.get(g.wheel.selected()).copied()) };
         let lib = &self.lib;

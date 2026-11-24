@@ -180,6 +180,8 @@ impl App {
             }
             let a = self.aside.take().expect("checked above");
             log::info!("{} has closed: menu back", a.name);
+            self.dof.suspend(false);
+            self.dof_shown = None;
             if let Some(g) = self.gfx.as_mut() {
                 for (o, visible) in g.outs.iter().zip(&a.visible) {
                     o.window.set_visible(*visible);
@@ -210,6 +212,8 @@ impl App {
             o.window.set_visible(false);
         }
         self.aside = Some(Aside { pid, name, visible });
+        // That table's DOF needs the hardware too.
+        self.dof.suspend(true);
         true
     }
 }
