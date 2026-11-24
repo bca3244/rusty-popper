@@ -56,6 +56,12 @@ style = "arc"          # "arc" or "flow"; W toggles at runtime
 # game_audio = true
 # game_audio_volume = 50
 
+[dof]
+# Light the cabinet's toys from the menu with DOF, using the DOF Config Tool's
+# "PinUP Menu" table (ROM pinupmenu), like Popper's menu. Off by default.
+# Also in the app: Exit -> Options.
+# enabled = false
+
 [update]
 # Look for a newer release on GitHub at startup; install from Exit -> Options.
 # check = true

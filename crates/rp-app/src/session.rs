@@ -127,6 +127,8 @@ impl App {
             return;
         }
         let Some(g) = self.gfx.as_mut() else { return };
+        // The table's own DOF needs the hardware: end ours (as Popper does).
+        self.dof.suspend(true);
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: (**emu).clone(), game: (**game).clone(), ignore: self.ignore_processes.clone() };
         // Make sure every screen shows this game's media while it loads.
         if g.shown != index {
@@ -184,6 +186,8 @@ impl App {
     /// `take_focus`) the keyboard focus, even from another program.
     pub(crate) fn return_from_game(&mut self, el: &ActiveEventLoop, take_focus: bool) {
         self.playing = None;
+        self.dof.suspend(false);
+        self.dof_shown = None;
         el.set_control_flow(ControlFlow::Poll);
         let now = Instant::now();
         // Time in the game isn't idle time: attract mode waits its full delay again.

@@ -152,6 +152,7 @@ impl App {
             format!("Wheel style: {}", if self.style == WheelStyle::Arc { "Arc" } else { "Cover flow" }),
             "Attract mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
+            format!("DOF lights: {}", if self.dof.enabled { "On" } else { "Off" }),
             self.update_label(),
             "Back".to_string(),
         ]
@@ -187,6 +188,11 @@ impl App {
         match row {
             0 => self.style = self.style.toggled(),
             3 => {
+                let on = !self.dof.enabled;
+                self.dof.set_enabled(on);
+                self.dof_shown = None;
+            }
+            4 => {
                 match self.updater.status() {
                     updater::Status::Available(rel) => self.updater.download(rel),
                     updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
@@ -245,6 +251,7 @@ impl App {
             sound_volume: self.sounds.volume,
             game_audio: self.game_audio.enabled,
             game_audio_volume: self.game_audio.volume,
+            dof: self.dof.enabled,
         };
         if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
             log::warn!("Couldn't save settings: {e:#}");
@@ -368,19 +375,23 @@ impl App {
                 }
             }
             Prev => {
+                self.dof.pulse(dof::PRIOR);
                 g.wheel.step(-1);
                 self.sounds.play(sfx::Sfx::Move(-1));
             }
             Next => {
+                self.dof.pulse(dof::NEXT);
                 g.wheel.step(1);
                 self.sounds.play(sfx::Sfx::Move(1));
             }
             // Popper's Page Prior/Next (usually the magna-saves) jump by letter.
             PagePrev | LetterPrev => {
+                self.dof.pulse(dof::PAGE_PRIOR);
                 self.jump_letter(-1);
                 self.sounds.play(sfx::Sfx::Jump);
             }
             PageNext | LetterNext => {
+                self.dof.pulse(dof::PAGE_NEXT);
                 self.jump_letter(1);
                 self.sounds.play(sfx::Sfx::Jump);
             }

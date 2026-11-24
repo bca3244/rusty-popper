@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.27] - 2026-11-24
+
+### Added
+- Optional **DOF** support, off by default: turn it on in **Options → DOF lights**. It uses the DOF Config Tool's **PinUP Menu** table (ROM `pinupmenu`) exactly as Popper's menu does, so an existing config lights up the same way: `E800`/`E801` on wheel prior/next, `E804`/`E805` on page next/prior, and a random `E901`-`E990` held for each game the wheel stops on. DOF is handed over to the table while a game runs (ours or one started by another program) and turned off when the menu exits. Uses Popper's `PinUPDOF.DOFLink` bridge, else DOF's own `DirectOutput.ComObject`; if neither is installed it does nothing. Options is now six rows.
+
 ## [0.2.26] - 2026-11-24
 
 ### Changed

@@ -16,6 +16,7 @@
 
 mod assets;
 mod discover;
+mod dof;
 mod errscreen;
 mod gameaudio;
 mod input;
@@ -318,6 +319,8 @@ fn run() -> Result<()> {
     let game_audio = gameaudio::GameAudio::new(&mpv, settings.sound.game_audio, settings.sound.game_audio_volume);
     let mut app = App {
         game_audio,
+        dof: dof::Dof::new(settings.dof.enabled),
+        dof_shown: None,
         mpv,
         screens,
         card_screens,
@@ -535,7 +538,7 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 5; // style, attract (submenu), sound (submenu), update, back
+const OPTION_ROWS: usize = 6; // style, attract (submenu), sound (submenu), DOF, update, back
 /// The Options rows that open the Attract mode and Sound submenus.
 const ATTRACT_ROW: usize = 1;
 const SOUND_ROW: usize = 2;
@@ -664,6 +667,10 @@ struct App {
     joy_blocked: bool,
     /// The selected game's Audio media, played after a short rest on it.
     game_audio: gameaudio::GameAudio,
+    /// Cabinet toys through DOF (optional; off by default).
+    dof: dof::Dof,
+    /// The item DOF last heard was selected.
+    dof_shown: Option<usize>,
     /// Spots tables started by other programs.
     others: rp_launch::OtherLaunches,
     /// Set while such a table is on screen and the menu has stepped aside.
@@ -757,6 +764,7 @@ impl ApplicationHandler for App {
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
         MENU_UP.store(false, Ordering::Relaxed);
+        self.dof.shutdown();
         self.shutdown();
     }
 }
