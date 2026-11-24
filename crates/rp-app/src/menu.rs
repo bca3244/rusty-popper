@@ -152,7 +152,7 @@ impl App {
             format!("Wheel style: {}", if self.style == WheelStyle::Arc { "Arc" } else { "Cover flow" }),
             "Attract mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
-            format!("DOF lights: {}", if self.dof.enabled { "On" } else { "Off" }),
+            format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
             self.update_label(),
             "Back".to_string(),
         ]

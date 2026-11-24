@@ -68,7 +68,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 - Wheel style (arc or cover flow)
 - **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume (*Back* in either submenu returns to Options)
-- **DOF lights** on or off (off by default; see below)
+- **DOF** on or off (off by default; see below)
 - Install update / check for updates
 
 **DOF (cabinet lights and toys)** is optional and off until you turn it on in Options. Rusty Popper drives DOF the way Popper's menu does, using the **PinUP Menu** table (ROM `pinupmenu`) from the DOF Config Tool, so your existing config works as it is: flashes for wheel and page moves (`E800`, `E801`, `E804`, `E805`), a random effect (`E901` to `E990`) for each game the wheel stops on, DOF handed to the table while a game runs, and everything off when the menu exits. It uses Popper's DOF bridge (`PinUPDOF.DOFLink`) if it's there, otherwise DOF's own COM object (`DirectOutput.ComObject`, registered for 64-bit). If neither is installed, nothing happens. There's no lighting setup in Rusty Popper itself; change effects in the DOF Config Tool.
@@ -102,7 +102,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 | `[attract]` | `enabled`, `idle_secs`, `interval_secs` |
 | `[audio]` | `volume` for the playfield video |
 | `[sound]` | Menu sound effects: `enabled`, `volume`, `dir`; game audio: `game_audio`, `game_audio_volume` |
-| `[dof]` | `enabled`: DOF lights for the menu (default off) |
+| `[dof]` | `enabled`: DOF for the menu (default off) |
 | `[update]` | `check` for updates at startup, and the `repo` they come from |
 
 ## What it changes

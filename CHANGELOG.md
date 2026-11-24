@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.28] - 2026-11-24
+
+### Changed
+- The **DOF lights** option is now called just **DOF**, since DOF drives more than lights (shakers, gear motors, knockers and other toys).
+
 ## [0.2.27] - 2026-11-24
 
 ### Added

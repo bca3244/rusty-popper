@@ -145,7 +145,7 @@ fn worker(rx: Receiver<Cmd>) {
                 Err(e) => {
                     // Not installed or not registered: stay off, quietly.
                     if !warned {
-                        log::info!("DOF: not available ({e:#}); lights stay off");
+                        log::info!("DOF: not available ({e:#}); DOF stays off");
                         warned = true;
                     }
                     Ok(())
