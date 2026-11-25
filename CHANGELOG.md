@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.33] - 2026-11-25
+
+### Fixed
+- The check for a driver that ignores vsync now runs within a quarter second of start (and the compositor check also ignores still frames), so the first scroll after starting no longer runs unpaced for up to a second.
+
 ## [0.2.32] - 2026-11-25
 
 ### Changed
@@ -224,6 +229,7 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.33]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.33
 [0.2.32]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.32
 [0.2.31]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.31
 [0.2.30]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.30
