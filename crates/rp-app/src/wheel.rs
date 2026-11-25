@@ -620,7 +620,8 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
         let s = cv.transform().average_scale().max(0.01);
         let per_module = (QR_SIZE * s / modules.max(1) as f32).round().max(2.0);
         let size = per_module * modules as f32 / s;
-        let (qx, qy) = (right - size, y + 14.0 - size);
+        // Bottom on the counter's baseline, clear of the title below.
+        let (qx, qy) = (right - size, y - size);
         let mut p = Path::new();
         p.rect(qx, qy, size, size);
         cv.fill_path(&p, &Paint::image(img, qx, qy, size, size, 0.0, 0.95));
