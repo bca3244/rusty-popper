@@ -1,5 +1,6 @@
 //! Phone remote: a small web page on the home network that shows what's
-//! playing and can exit Rusty Popper, restart or shut down the cabinet.
+//! playing, changes the Options settings, installs updates, and can exit
+//! Rusty Popper, restart or shut down the cabinet.
 //!
 //! Off by default (Options → Phone remote, or `[remote] enabled`). One
 //! `tiny_http` server on its own thread, no async runtime: it idles waiting
@@ -34,16 +35,41 @@ const ADDRESS_EVERY: Duration = Duration::from_secs(20);
 const REPLY_WAIT: Duration = Duration::from_secs(3);
 /// Wheel images bigger than this aren't sent.
 const MAX_IMAGE: u64 = 8 << 20;
+/// How often the menu thread refreshes the settings the page shows.
+const SETTINGS_EVERY: Duration = Duration::from_millis(500);
 /// The header every command needs.
 const COMMAND_HEADER: &str = "X-Rusty-Popper";
 
 static PAGE: &str = include_str!("remote.html");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Exit,
     Restart,
     Shutdown,
+    /// Change a setting (`key`, `value`), as Options would.
+    Set(String, String),
+}
+
+/// The Options settings, for the page's Settings card.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct SettingsView {
+    pub style: &'static str,
+    pub attract: bool,
+    pub attract_idle: u64,
+    pub attract_interval: u64,
+    pub idle_choices: &'static [u64],
+    pub interval_choices: &'static [u64],
+    pub volume: i32,
+    pub sfx: bool,
+    pub sfx_volume: i32,
+    pub game_audio: bool,
+    pub game_audio_volume: i32,
+    pub dof: bool,
+    /// Where updates stand, as Options words it.
+    pub update: String,
+    /// What the update button does now: "install", "check" or "" (busy).
+    pub update_action: &'static str,
 }
 
 /// A command from the page, and where to say whether it was taken.
@@ -85,6 +111,7 @@ pub struct Snapshot {
 
 struct Shared {
     snapshot: Mutex<Snapshot>,
+    settings: Mutex<SettingsView>,
     url: Mutex<String>,
     /// Bumped when `url` changes.
     url_version: AtomicU64,
@@ -101,6 +128,8 @@ pub struct Remote {
     /// The last thing published, to skip unchanged snapshots.
     last_key: Option<(u8, usize)>,
     image_version: u64,
+    /// When the settings were last published.
+    settings_at: Option<std::time::Instant>,
 }
 
 impl Remote {
@@ -123,6 +152,7 @@ impl Remote {
         }
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot { state: "menu", version: env!("CARGO_PKG_VERSION"), ..Default::default() }),
+            settings: Mutex::new(SettingsView::default()),
             url: Mutex::new(make_url(&host_for(address.as_deref()), port, pin.as_deref())),
             url_version: AtomicU64::new(1),
             stop: AtomicBool::new(false),
@@ -133,7 +163,7 @@ impl Remote {
             .name("remote".into())
             .spawn(move || serve(&worker_server, worker, tx, port, pin, address))
             .context("starting the web server thread")?;
-        let remote = Remote { shared, rx, server: Some(server), thread: Some(thread), port, last_key: None, image_version: first_image_version() };
+        let remote = Remote { shared, rx, server: Some(server), thread: Some(thread), port, last_key: None, image_version: first_image_version(), settings_at: None };
         log::info!("Phone remote on {}", short_url(&remote.url().0));
         Ok(remote)
     }
@@ -160,6 +190,24 @@ impl Remote {
         snap.version = env!("CARGO_PKG_VERSION");
         if let Ok(mut s) = self.shared.snapshot.lock() {
             *s = snap;
+        }
+    }
+
+    /// Whether it's time to publish the settings again.
+    pub fn settings_due(&mut self) -> bool {
+        let due = self.settings_at.is_none_or(|t| t.elapsed() >= SETTINGS_EVERY);
+        if due {
+            self.settings_at = Some(std::time::Instant::now());
+        }
+        due
+    }
+
+    /// Publishes the settings, if they changed.
+    pub fn publish_settings(&mut self, view: SettingsView) {
+        if let Ok(mut s) = self.shared.settings.lock() {
+            if *s != view {
+                *s = view;
+            }
         }
     }
 
@@ -238,7 +286,7 @@ fn handle(req: tiny_http::Request, shared: &Shared, tx: &Sender<Request>, pin: O
             (tiny_http::Method::Get, "/") => page(),
             (tiny_http::Method::Get, "/api/status") => status(shared),
             (tiny_http::Method::Get, "/api/wheel.png") => wheel_image(shared),
-            (tiny_http::Method::Post, p) if p.starts_with("/api/") => match command_of(p) {
+            (tiny_http::Method::Post, p) if p.starts_with("/api/") => match command_of(p, query) {
                 None => text(404, "Not found"),
                 Some(_) if !has_header => text(403, "Missing header"),
                 Some(cmd) => run_command(cmd, tx),
@@ -275,7 +323,10 @@ fn page() -> Response {
 fn status(shared: &Shared) -> Response {
     let mut snap = shared.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
     snap.secs = snap.since.and_then(|t| t.elapsed().ok()).map(|d| d.as_secs());
-    respond(200, "application/json", serde_json::to_vec(&snap).unwrap_or_default())
+    let settings = shared.settings.lock().map(|s| s.clone()).unwrap_or_default();
+    let mut json = serde_json::to_value(&snap).unwrap_or_default();
+    json["settings"] = serde_json::to_value(&settings).unwrap_or_default();
+    respond(200, "application/json", serde_json::to_vec(&json).unwrap_or_default())
 }
 
 fn wheel_image(shared: &Shared) -> Response {
@@ -287,11 +338,17 @@ fn wheel_image(shared: &Shared) -> Response {
     }
 }
 
-fn command_of(path: &str) -> Option<Command> {
+fn command_of(path: &str, query: &str) -> Option<Command> {
+    // Setting names and values are short words and numbers.
+    let word = |s: &str| !s.is_empty() && s.len() <= 24 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
     match path {
         "/api/exit" => Some(Command::Exit),
         "/api/restart" => Some(Command::Restart),
         "/api/shutdown" => Some(Command::Shutdown),
+        "/api/set" => {
+            let (key, value) = (query_value(query, "key")?, query_value(query, "value")?);
+            (word(key) && word(value)).then(|| Command::Set(key.to_string(), value.to_string()))
+        }
         _ => None,
     }
 }
@@ -457,10 +514,21 @@ impl crate::App {
 
     /// Carries out the page's commands. Runs every tick, also during a game.
     pub(crate) fn poll_remote(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let Some(r) = &self.remote else { return };
-        while let Some((cmd, reply)) = r.try_recv() {
+        let Some(r) = self.remote.as_mut() else { return };
+        let requests: Vec<Request> = std::iter::from_fn(|| r.try_recv()).collect();
+        // The page's Settings card: a couple of times a second is plenty.
+        if r.settings_due() {
+            let view = self.settings_view();
+            if let Some(r) = self.remote.as_mut() {
+                r.publish_settings(view);
+            }
+        }
+        for (cmd, reply) in requests {
             log::info!("Phone remote: {cmd:?}");
             match cmd {
+                Command::Set(key, value) => {
+                    let _ = reply.send(self.set_from_remote(&key, &value));
+                }
                 // Leaving mid-game would skip the emulator's close-down script.
                 Command::Exit if self.playing.is_some() => {
                     let _ = reply.send(Err("A game is running. Close it first.".into()));
@@ -574,8 +642,11 @@ mod tests {
         assert_eq!(make_url("192.168.1.20", 8642, Some("42")), "http://192.168.1.20:8642/?pin=42");
         assert_eq!(make_url("fe80::1", 80, None), "http://[fe80::1]:80/");
         assert_eq!(short_url("http://192.168.1.20:8642/?pin=42"), "192.168.1.20:8642");
-        assert_eq!(command_of("/api/shutdown"), Some(Command::Shutdown));
-        assert_eq!(command_of("/api/format"), None);
+        assert_eq!(command_of("/api/shutdown", ""), Some(Command::Shutdown));
+        assert_eq!(command_of("/api/format", ""), None);
+        assert_eq!(command_of("/api/set", "pin=1&key=volume&value=40"), Some(Command::Set("volume".into(), "40".into())));
+        assert_eq!(command_of("/api/set", "key=volume&value=4%200"), None);
+        assert_eq!(command_of("/api/set", "key=volume"), None);
     }
 
     #[test]

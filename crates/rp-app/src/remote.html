@@ -28,6 +28,19 @@
   button:disabled { opacity: .5; }
   #msg { min-height: 1.4em; color: var(--dim); text-align: center; font-size: 14px; }
   #msg.err { color: #ff8a80; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 14px 0 6px; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+  .row label { flex: 1; white-space: nowrap; }
+  .row output { min-width: 3.2em; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  select { background: #222834; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; }
+  input[type=range] { flex: 1; min-width: 0; accent-color: var(--copper); }
+  input[type=checkbox] { appearance: none; width: 48px; height: 28px; border-radius: 14px; background: #333a48; position: relative; transition: background .15s; flex: none; }
+  input[type=checkbox]::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: left .15s; }
+  input[type=checkbox]:checked { background: var(--copper); }
+  input[type=checkbox]:checked::after { left: 23px; }
+  #update-status { color: var(--dim); font-size: 14px; }
+  button.small { width: auto; min-height: 40px; padding: 0 16px; margin: 0; }
 </style>
 </head>
 <body>
@@ -39,6 +52,27 @@
     <div id="title"></div>
     <div id="sub"></div>
     <dl id="facts"></dl>
+  </section>
+  <section class="card" id="settings" hidden>
+    <h2>Wheel</h2>
+    <div class="row"><label for="style">Wheel style</label>
+      <select id="style" data-key="style">
+        <option value="arc">Arc</option><option value="flow">Cover flow</option><option value="minimal">Minimal</option><option value="vertical">Vertical</option>
+      </select></div>
+    <h2>Attract mode</h2>
+    <div class="row"><label for="attract">Attract mode</label><input type="checkbox" id="attract" data-key="attract"></div>
+    <div class="row"><label for="attract_idle">Starts after</label><select id="attract_idle" data-key="attract_idle"></select></div>
+    <div class="row"><label for="attract_interval">Time per game</label><select id="attract_interval" data-key="attract_interval"></select></div>
+    <h2>Sound</h2>
+    <div class="row"><label for="volume">Video volume</label><input type="range" id="volume" data-key="volume" min="0" max="100" step="10"><output for="volume"></output></div>
+    <div class="row"><label for="sfx">Sound effects</label><input type="checkbox" id="sfx" data-key="sfx"></div>
+    <div class="row"><label for="sfx_volume">Effects volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
+    <div class="row"><label for="game_audio">Game audio</label><input type="checkbox" id="game_audio" data-key="game_audio"></div>
+    <div class="row"><label for="game_audio_volume">Game audio volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
+    <h2>Cabinet</h2>
+    <div class="row"><label for="dof">DOF lights</label><input type="checkbox" id="dof" data-key="dof"></div>
+    <h2>Updates</h2>
+    <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
   </section>
   <section class="card">
     <button data-cmd="exit">Exit Rusty Popper</button>
@@ -97,7 +131,72 @@ function show(s) {
     } else img.hidden = true;
   }
   document.querySelector('[data-cmd="exit"]').disabled = s.state === "launching" || s.state === "playing" || s.state === "exiting";
+  if (s.settings && s.settings.style) showSettings(s.settings);
 }
+
+// Settings: shown as the cabinet has them, except a control touched in the
+// last few seconds (so a poll doesn't snap it back while it's being changed).
+const touched = {};
+const mins = (sec) => sec % 60 === 0 ? (sec / 60) + " min" : sec + " s";
+function fillChoices(sel, values, label) {
+  const want = values.join(",");
+  if (sel.dataset.choices === want) return;
+  sel.dataset.choices = want;
+  sel.replaceChildren(...values.map((v) => { const o = document.createElement("option"); o.value = v; o.textContent = label(v); return o; }));
+}
+function showSettings(st) {
+  $("settings").hidden = false;
+  fillChoices($("attract_idle"), st.idle_choices, mins);
+  fillChoices($("attract_interval"), st.interval_choices, (v) => v + " s");
+  for (const el of document.querySelectorAll("[data-key]")) {
+    const k = el.dataset.key;
+    if (Date.now() - (touched[k] || 0) < 3000) continue;
+    if (el.type === "checkbox") el.checked = !!st[k];
+    else el.value = String(st[k]);
+    const out = document.querySelector('output[for="' + k + '"]');
+    if (out) out.textContent = st[k] + "%";
+  }
+  $("update-status").textContent = st.update;
+  const u = $("update");
+  u.hidden = !st.update_action;
+  u.dataset.action = st.update_action;
+  u.textContent = st.update_action === "install" ? "Install" : "Check";
+}
+async function setting(key, value) {
+  touched[key] = Date.now();
+  try {
+    const r = await fetch("/api/set" + q + (q ? "&" : "?") + "key=" + key + "&value=" + value, { method: "POST", headers: { "X-Rusty-Popper": "1" } });
+    if (!r.ok) say(await r.text(), true);
+    else say("");
+  } catch (e) { say("Couldn't reach the cabinet.", true); }
+}
+for (const el of document.querySelectorAll("[data-key]")) {
+  const k = el.dataset.key;
+  if (el.type === "range") {
+    el.addEventListener("input", () => { touched[k] = Date.now(); document.querySelector('output[for="' + k + '"]').textContent = el.value + "%"; });
+    el.addEventListener("change", () => setting(k, el.value));
+  } else if (el.type === "checkbox") {
+    el.addEventListener("change", () => setting(k, el.checked ? "on" : "off"));
+  } else {
+    el.addEventListener("change", () => setting(k, el.value));
+  }
+}
+let updateArmed = 0;
+$("update").addEventListener("click", () => {
+  const u = $("update"), install = u.dataset.action === "install";
+  // Installing restarts Rusty Popper: ask for a second tap.
+  if (install && Date.now() - updateArmed > 4000) {
+    updateArmed = Date.now();
+    u.classList.add("armed");
+    u.textContent = "Tap again";
+    setTimeout(() => { u.classList.remove("armed"); if (u.dataset.action === "install") u.textContent = "Install"; }, 4000);
+    return;
+  }
+  updateArmed = 0;
+  u.classList.remove("armed");
+  say(install ? "Downloading the update. Rusty Popper restarts into it when no game is running." : "Checking for updates…");
+  setting("update", install ? "install" : "check");
+});
 
 async function poll() {
   try {
