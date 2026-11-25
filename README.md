@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
    - `rusty-popper.toml`, your settings, and `rusty-popper.example.toml`, which lists every option
    - `Enable-RustyPopperStartup.ps1` and `Disable-RustyPopperStartup.ps1`, for starting at boot
    - `Allow-RustyPopperRemote.ps1`, to let the phone remote through the Windows firewall
-3. **Close Popper** if it's running, then **run `rusty-popper.exe`** to try it.
+3. **Close PinUp Popper** if it's running, then **run `rusty-popper.exe`** to try it.
    - It finds Popper by itself: the default `C:\vPinball\PinUPSystem` first, then where Windows has PinUpPlayer registered, then the usual install folders on every drive. If it had to search, the folder it found is saved to `rusty-popper.toml` so the next start goes straight there.
    - If it can't start (Popper not found, `libmpv-2.dll` missing), it shows an error screen on the playfield saying why (any button closes it). More detail is in `rusty-popper.log` next to the exe.
 4. **Start it at boot (optional).** Right-click `Enable-RustyPopperStartup.ps1` and choose *Run with PowerShell*. It asks for administrator rights. It creates a "Run Rusty Popper" logon task and disables Popper's own "Run Pinup Popper" task, so only one front end starts.
