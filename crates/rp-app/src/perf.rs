@@ -112,10 +112,16 @@ impl Pacer {
         Pacer { unpaced: false, window_start: now, frames: 0, next: now, dwm_ok: true, dwm_frames: 0, dwm_since: now }
     }
 
-    /// Call right after the playfield's swap.
-    pub fn after_swap(&mut self, period: Duration) {
+    /// Call right after the playfield's swap. `every_refresh`: the menu is
+    /// moving, so it presents every refresh (while it's still and presents
+    /// only new video frames, the rate says nothing about vsync).
+    pub fn after_swap(&mut self, period: Duration, every_refresh: bool) {
         let now = Instant::now();
         if !self.unpaced {
+            if !every_refresh {
+                self.window_start = now;
+                self.frames = 0;
+            }
             self.frames += 1;
             let elapsed = now - self.window_start;
             if elapsed >= Duration::from_secs(1) {

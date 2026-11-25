@@ -260,6 +260,9 @@ impl App {
             Some(MenuKind::Exit) | None => Vec::new(),
         };
         let ui_rotation = self.ui_rotation();
+        // Menu, letter and card animations all finish within a second of the
+        // button press (or the card's picture arriving) that started them.
+        let animating = self.last_input.elapsed() < STILL_AFTER || self.card.as_ref().is_some_and(|c| c.opened.elapsed() < STILL_AFTER);
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
 
         let now_i = Instant::now();
@@ -326,13 +329,16 @@ impl App {
         }
         g.perf.part("media swap");
 
-        // Which screens need presenting this frame. The playfield always does
-        // (the wheel moves), but mpv only draws into its texture when there's
-        // a new video frame; a secondary screen is presented only when its
-        // video has a new frame or something on it changed. Either way there's
-        // a redraw every second as a backstop.
+        // Which screens need presenting this frame. While anything moves the
+        // playfield is presented every refresh, but mpv only draws into its
+        // texture when there's a new video frame. Once the menu is still, the
+        // playfield too is presented only for a new video frame (so 60 fps
+        // video costs 60 frames a second, not the display's 144), like a
+        // secondary screen. Either way there's a redraw every second as a
+        // backstop.
         video::reset_for_mpv(&g.gl);
         let card_out = self.card.as_ref().map(|c| c.out);
+        let still = !animating && g.wheel.at_rest() && g.outs.iter().all(|o| o.slide.is_none());
         let present: Vec<(bool, bool)> = g
             .outs
             .iter()
@@ -343,8 +349,9 @@ impl App {
                 let card_changed = o.had_card.replace(card_here) != card_here;
                 let stale = o.drawn_at.get().elapsed() >= REDRAW_EVERY;
                 let render_video = fresh || o.dirty.get() || stale || o.target.is_none();
-                let present = i == 0 || fresh || o.dirty.get() || stale || card_here || card_changed || o.slide.is_some();
-                (render_video && (i == 0 || present), present)
+                let every_frame = i == 0 && (!still || o.target.is_none());
+                let present = every_frame || fresh || o.dirty.get() || stale || card_here || card_changed || o.slide.is_some();
+                (render_video && present, present)
             })
             .collect();
 
@@ -405,6 +412,14 @@ impl App {
             o.surface.swap_buffers(&g.context)?;
         }
         g.perf.part("other screens");
+        if !present[0].1 {
+            // Still, and no new video frame yet: look again shortly.
+            if self.deadline.is_some_and(|d| Instant::now() >= d) {
+                el.exit();
+            }
+            std::thread::sleep(STILL_POLL);
+            return Ok(());
+        }
         // Playfield: video, then the wheel on top, then present (waits for vsync).
         let (w, h) = (g.outs[0].screen.width, g.outs[0].screen.height);
         g.context.make_current(&g.outs[0].surface)?;
@@ -483,7 +498,7 @@ impl App {
         }
         // Normally the swap above waits for vsync. If the driver ignores it
         // (seen on the cabinet), pace frames to the refresh rate ourselves.
-        g.pacer.after_swap(g.frame_period);
+        g.pacer.after_swap(g.frame_period, !still);
         Ok(())
     }
 

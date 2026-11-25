@@ -82,6 +82,11 @@ const PLAY_POLL: Duration = Duration::from_millis(50);
 /// A frame never takes less than this, so a display without vsync (or a
 /// covered window) can't turn the render loop into a busy loop.
 const MIN_FRAME: Duration = Duration::from_millis(4);
+/// This long after the last button press the menu counts as still (its
+/// animations are over), and draws only when the video has a new frame.
+const STILL_AFTER: Duration = Duration::from_millis(1200);
+/// While the menu is still, how often to look for a new video frame or input.
+const STILL_POLL: Duration = Duration::from_millis(2);
 /// Time per frame for turning loaded logos into textures.
 const LOGO_UPLOAD_BUDGET: Duration = Duration::from_millis(3);
 /// A secondary screen with nothing new is still redrawn this often.

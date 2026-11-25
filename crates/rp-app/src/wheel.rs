@@ -84,6 +84,11 @@ impl Wheel {
         self.pos = self.pos.clamp(self.target as f32 - 6.0, self.target as f32 + 6.0);
     }
 
+    /// Whether the wheel has stopped moving and the info has faded in.
+    pub fn at_rest(&self) -> bool {
+        self.pos == self.target as f32 && self.info_t >= INFO_FADE
+    }
+
     /// Advances the animation. Returns true when the selection changed.
     pub fn update(&mut self, dt: f32, now: f64) -> bool {
         let behind = ((self.target as f32 - self.pos).abs() - 1.0).clamp(0.0, 3.0);

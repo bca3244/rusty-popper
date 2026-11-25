@@ -2,6 +2,12 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.32] - 2026-11-25
+
+### Changed
+- **Less CPU while the menu sits still**: once the wheel and any menu have stopped moving (about a second after the last press), the playfield is redrawn only when its video has a new frame, instead of every refresh of the display. On the 144 Hz test cabinet with 60 fps videos that's 60 frames a second instead of 144, and the menu's CPU use dropped from about 72% to about 45-50% of one core (GPU 3D from about 35% to 25-30%). Scrolling and menus still draw every refresh.
+- The check for a driver that ignores vsync now only counts frames drawn every refresh, so it no longer misses that on a still menu and lets the first scroll after start run unpaced for a second.
+
 ## [0.2.31] - 2026-11-25
 
 ### Changed
@@ -218,6 +224,7 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.32]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.32
 [0.2.31]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.31
 [0.2.30]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.30
 [0.2.29]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.29
