@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.31] - 2026-11-25
+
+### Changed
+- The log line written when Popper's database changes now says what changed, for example "playlist contents changed (Most Played)", "2 games added" or "button setup changed", instead of only repeating the game and playlist counts. Usually it's just a playlist's order (Rusty Popper's own play statistics reorder "Most Played").
+
 ## [0.2.30] - 2026-11-24
 
 Speed and responsiveness, from a performance review of v0.2.29.
@@ -213,6 +218,9 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.31]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.31
+[0.2.30]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.30
+[0.2.29]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.29
 [0.2.28]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.28
 [0.2.27]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.27
 [0.2.26]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.26

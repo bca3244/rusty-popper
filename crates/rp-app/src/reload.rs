@@ -75,8 +75,8 @@ impl App {
         // reorders "Most Played"): then the logos and, where possible, the
         // wheel and the videos are left alone.
         let same_items = lib.items == self.lib.items;
+        log::info!("Popper's database changed: {} ({} games, {} playlists)", lib.changes_since(&self.lib), lib.game_count, lib.playlists.len());
         self.lib = lib;
-        log::info!("Popper's database changed: now {} games, {} playlists", self.lib.game_count, self.lib.playlists.len());
         self.bindings = input::Bindings::new(&self.lib.functions, &self.joy_overrides, self.keyboard_quit);
         self.playlist = self.lib.playlist_named(&playlist_name);
         if !self.lib.has_games(self.playlist) {
