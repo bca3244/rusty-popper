@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.34] - 2026-11-25
+
+### Added
+- **Phone remote** (optional, off by default; Exit → Options → Phone remote). A small web page on your home network shows the game being played, or the one on the wheel, with its details and play time, and has *Exit Rusty Popper*, *Restart cabinet* and *Shut down cabinet* buttons (each needs a second tap). A small QR code in the corner of the wheel opens it. The address is fixed (port 8642 by default); a PIN is optional. Only devices on the local network are answered. `Allow-RustyPopperRemote.ps1` lets it through Windows Firewall.
+
 ## [0.2.33] - 2026-11-25
 
 ### Fixed

@@ -62,6 +62,16 @@ style = "arc"          # "arc", "flow", "minimal" or "vertical"; W cycles at run
 # Also in the app: Exit -> Options.
 # enabled = false
 
+[remote]
+# Phone remote: a small web page on your home network (what's playing; exit,
+# restart, shut down). A QR code in the corner of the wheel links to it.
+# Off by default. Also in the app: Exit -> Options. Run
+# Allow-RustyPopperRemote.ps1 once to let it through Windows Firewall.
+# enabled = false
+# port = 8642
+# pin = '1234'            # optional; the QR code includes it
+# address = '192.168.1.20'  # optional; default: this PC's own address
+
 [update]
 # Look for a newer release on GitHub at startup; install from Exit -> Options.
 # check = true

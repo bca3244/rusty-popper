@@ -69,6 +69,14 @@ impl App {
             }
         }
         let launching = phase == Phase::Launching || (phase == Phase::Playing && !p.table_up);
+        let state = match phase {
+            Phase::Exiting => remote::EXITING,
+            _ if launching => remote::LAUNCHING,
+            _ => remote::PLAYING,
+        };
+        let (index, since) = (p.index, p.since);
+        self.publish_remote(state, Some(index), Some(since), None);
+        let Some(p) = self.playing.as_mut() else { return Ok(()) };
         if let Some(g) = self.gfx.as_mut() {
             // Popper's "Exit Emulators" button closes the game, whichever
             // window has the focus (ignored for a moment after Start).
