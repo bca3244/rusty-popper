@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.38] - 2026-11-25
+
+### Added
+- The phone remote's process page (now called *Pinball processes*) also lists Future Pinball, PinUP Popper and PuP (PinUpMenu and its setup app, PinUpPlayer, PinUpDisplayer, PinUpPackEditor, PUPServer), dmdext and FlexDMD, so any of them can be killed if they hang. PinUpDOF (the DOF bridge Rusty Popper uses) and Rusty Popper itself are never listed.
+
 ## [0.2.37] - 2026-11-25
 
 ### Added

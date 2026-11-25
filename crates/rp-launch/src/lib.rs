@@ -336,7 +336,7 @@ fn named_like(name: &str, prefixes: &[&str]) -> bool {
 }
 
 /// Running processes whose name starts with one of `prefixes` (lowercase),
-/// oldest first.
+/// oldest first. Never this process itself.
 pub fn processes_named(prefixes: &[&str]) -> Vec<RunningProcess> {
     let Ok(mut sys) = System::new() else { return Vec::new() };
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
@@ -345,7 +345,7 @@ pub fn processes_named(prefixes: &[&str]) -> Vec<RunningProcess> {
         .processes()
         .iter()
         .map(|(pid, p)| (pid, p.name().to_string_lossy(), p.start_time()))
-        .filter(|(_, name, _)| named_like(name, prefixes))
+        .filter(|(pid, name, _)| pid.as_u32() != std::process::id() && named_like(name, prefixes))
         .map(|(pid, name, start)| RunningProcess { pid: pid.as_u32(), name: name.into_owned(), secs: now.saturating_sub(start) })
         .collect();
     list.sort_by_key(|p| std::cmp::Reverse(p.secs));

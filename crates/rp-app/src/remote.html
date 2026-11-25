@@ -88,15 +88,15 @@
   </section>
   <section class="card" id="procs" hidden>
     <button class="small back">‹ Back</button>
-    <h2>VPinball processes</h2>
-    <p>If a table hangs, kill it here. Rusty Popper then goes back to the wheel.</p>
+    <h2>Pinball processes</h2>
+    <p>If a table or one of its helpers hangs, kill it here. Rusty Popper then goes back to the wheel.</p>
     <div id="proc-list"></div>
     <div id="procs-empty" hidden>None running.</div>
     <button id="kill-all" class="power" hidden>Kill all</button>
   </section>
   <section class="card" id="actions">
     <button id="open-settings" hidden>Settings</button>
-    <button id="open-procs">VPinball processes</button>
+    <button id="open-procs">Pinball processes</button>
     <button data-cmd="exit">Exit Rusty Popper</button>
     <button data-cmd="restart" class="power">Restart cabinet</button>
     <button data-cmd="shutdown" class="power">Shut down cabinet</button>
@@ -208,7 +208,7 @@ $("open-settings").addEventListener("click", () => { location.hash = "settings";
 $("open-procs").addEventListener("click", () => { location.hash = "procs"; });
 for (const b of document.querySelectorAll("button.back")) b.addEventListener("click", () => { history.length > 1 ? history.back() : (location.hash = ""); });
 
-// VPinball processes: read while that view is open; each Kill needs a second tap.
+// Pinball processes: read while that view is open; each Kill needs a second tap.
 let procsTimer = 0, procsArmed = null;
 async function pollProcs() {
   clearTimeout(procsTimer);
