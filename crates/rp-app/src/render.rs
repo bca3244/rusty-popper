@@ -443,6 +443,21 @@ impl App {
         g.canvas.save();
         let (lw, lh) = face_player(&mut g.canvas, w, h, pf_rot);
         let letter = self.letter.map(|(c, at)| (c, at.elapsed().as_secs_f32()));
+        // The phone remote's QR code, (re)made when the remote starts or its address changes.
+        match &self.remote {
+            Some(r) if g.qr.as_ref().map(|q| q.version) != Some(r.url_version()) => {
+                if let Some(old) = g.qr.take() {
+                    g.canvas.delete_image(old.img);
+                }
+                let (url, version) = r.url();
+                g.qr = remote::qr_rgba(&url).and_then(|(rgba, n)| {
+                    use femtovg::rgb::FromSlice;
+                    let img = g.canvas.create_image(femtovg::imgref::Img::new(rgba.as_rgba(), n, n), ImageFlags::NEAREST).ok()?;
+                    Some(Qr { img, modules: n, version })
+                });
+            }
+            _ => {}
+        }
         let frame = wheel::Frame {
             style,
             wheel: &g.wheel,
@@ -456,25 +471,9 @@ impl App {
                 updater::Status::Downloading { percent, .. } => Some(format!("DOWNLOADING UPDATE {percent}%")),
                 _ => None,
             },
+            qr: g.qr.as_ref().filter(|_| self.remote.is_some()).map(|q| (q.img, q.modules)),
         };
         wheel::draw(&mut g.canvas, lw, lh, &frame);
-        if let Some(r) = &self.remote {
-            // (Re)made when the remote starts or its address changes.
-            if g.qr.as_ref().map(|q| q.version) != Some(r.url_version()) {
-                if let Some(old) = g.qr.take() {
-                    g.canvas.delete_image(old.img);
-                }
-                let (url, version) = r.url();
-                g.qr = remote::qr_rgba(&url).and_then(|(rgba, n)| {
-                    use femtovg::rgb::FromSlice;
-                    let img = g.canvas.create_image(femtovg::imgref::Img::new(rgba.as_rgba(), n, n), ImageFlags::NEAREST).ok()?;
-                    Some(Qr { img, modules: n, label: remote::short_url(&url).to_string(), version })
-                });
-            }
-            if let Some(q) = &g.qr {
-                wheel::draw_qr(&mut g.canvas, lw, lh, (q.img, q.modules), &q.label, style, &g.fonts);
-            }
-        }
         if let Some(menu) = &self.menu {
             let names: Vec<&str> = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.to_vec(),

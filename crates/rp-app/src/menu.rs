@@ -154,7 +154,8 @@ impl App {
             format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
             match (&self.remote_error, self.remote.is_some()) {
                 (Some(why), _) => format!("Phone remote: can't start ({why})"),
-                (None, true) => "Phone remote: On".to_string(),
+                // The address, for typing in when the QR code won't scan.
+                (None, true) => format!("Phone remote: On \u{b7} {}", self.remote.as_ref().map_or(String::new(), |r| remote::short_url(&r.url().0).to_string())),
                 (None, false) => "Phone remote: Off".to_string(),
             },
             self.update_label(),

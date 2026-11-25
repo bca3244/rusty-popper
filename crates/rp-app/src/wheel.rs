@@ -124,7 +124,14 @@ pub struct Frame<'a> {
     pub letter: Option<(char, f32)>,
     /// "Update v… available" note, shown small in the corner.
     pub update_note: Option<String>,
+    /// The phone remote's QR code (one pixel per module, and its size in
+    /// pixels), shown in the top-right corner beside the counter.
+    pub qr: Option<(ImageId, usize)>,
 }
+
+/// About how big the phone remote's QR code is, in design units (it is
+/// rounded to a whole number of pixels per module, so it stays crisp).
+const QR_SIZE: f32 = 104.0;
 
 impl Frame<'_> {
     /// Entry at wheel position `pos` (index into the playlist).
@@ -607,41 +614,25 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
         let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
         chip_x += w + 12.0;
     }
-    if let Some(note) = &f.update_note {
-        let _ = cv.fill_text(vw - 96.0, y - 76.0, note, &text(f.fonts.mono, 22.0, Color::rgbaf(1.0, 0.75, 0.33, 0.95), Align::Right));
+    // The phone remote's QR code in the corner, the text to its left.
+    let mut right = vw - 96.0;
+    if let Some((img, modules)) = f.qr {
+        let s = cv.transform().average_scale().max(0.01);
+        let per_module = (QR_SIZE * s / modules.max(1) as f32).round().max(2.0);
+        let size = per_module * modules as f32 / s;
+        let (qx, qy) = (right - size, y + 14.0 - size);
+        let mut p = Path::new();
+        p.rect(qx, qy, size, size);
+        cv.fill_path(&p, &Paint::image(img, qx, qy, size, size, 0.0, 0.95));
+        right = qx - 24.0;
     }
-    let _ = cv.fill_text(vw - 96.0, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
+    if let Some(note) = &f.update_note {
+        let _ = cv.fill_text(right, y - 76.0, note, &text(f.fonts.mono, 22.0, Color::rgbaf(1.0, 0.75, 0.33, 0.95), Align::Right));
+    }
+    let _ = cv.fill_text(right, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
     let counter = format!("{:02} / {}", idx + 1, f.order.len());
-    let _ = cv.fill_text(vw - 96.0, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
+    let _ = cv.fill_text(right, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
 }
-
-/// The phone remote's QR code, small in the bottom-right corner (bottom-left
-/// for the Vertical style, whose list runs down the right edge), with the
-/// address under it. `qr` is the code at one pixel per module and its
-/// size in pixels; it is scaled by a whole number of pixels per module so it
-/// stays crisp enough to scan.
-pub fn draw_qr(cv: &mut Cv, w: f32, h: f32, (img, modules): (ImageId, usize), label: &str, style: WheelStyle, fonts: &Fonts) {
-    let s = (h / DESIGN_H).min(w / DESIGN_H);
-    let (vw, dh) = (w / s, h / s);
-    let per_module = (QR_SIZE * s / modules.max(1) as f32).round().max(2.0);
-    let size = per_module * modules as f32 / s;
-    cv.save();
-    cv.scale(s, s);
-    let margin = 28.0;
-    let x = if style == WheelStyle::Vertical { margin } else { vw - margin - size };
-    let y = dh - margin - 26.0 - size;
-    let mut p = Path::new();
-    p.rect(x, y, size, size);
-    cv.fill_path(&p, &Paint::image(img, x, y, size, size, 0.0, 0.92));
-    let paint = Paint::color(Color::rgbaf(0.9, 0.92, 0.96, 0.8)).with_font(&[fonts.mono]).with_font_size(18.0).with_text_align(Align::Center).with_text_baseline(Baseline::Bottom);
-    let shadow = paint.clone().with_color(Color::rgbaf(0.0, 0.0, 0.0, 0.6));
-    let _ = cv.fill_text(x + size / 2.0 + 1.5, dh - margin + 1.5, label, &shadow);
-    let _ = cv.fill_text(x + size / 2.0, dh - margin, label, &paint);
-    cv.restore();
-}
-
-/// How big the QR code is, in design units (about, after rounding to whole pixels per module).
-const QR_SIZE: f32 = 132.0;
 
 /// The exit menu as drawn: options, which is selected, and seconds since it opened.
 pub struct MenuView<'a> {

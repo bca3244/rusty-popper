@@ -382,11 +382,12 @@ fn make_url(host: &str, port: u16, pin: Option<&str>) -> String {
 }
 
 /// The QR code for `text` as an RGBA image, one pixel per module with a
-/// four-module white border. Drawn scaled up without smoothing.
+/// thin white border (two modules: phones read that fine, and it keeps the
+/// code small). Drawn scaled up without smoothing.
 pub fn qr_rgba(text: &str) -> Option<(Vec<u8>, usize)> {
     use qrcodegen::{QrCode, QrCodeEcc};
     let qr = QrCode::encode_text(text, QrCodeEcc::Medium).ok()?;
-    let border = 4;
+    let border = 2;
     let n = qr.size() as usize + 2 * border;
     let mut rgba = Vec::with_capacity(n * n * 4);
     for y in 0..n as i32 {
@@ -581,7 +582,7 @@ mod tests {
     fn qr_has_a_border() {
         let (rgba, n) = qr_rgba("http://192.168.1.20:8642/").unwrap();
         assert_eq!(rgba.len(), n * n * 4);
-        assert!(rgba[..4 * n * 4].iter().all(|&b| b == 255), "top border is white");
+        assert!(rgba[..2 * n * 4].iter().all(|&b| b == 255), "top border is white");
         assert!(rgba.chunks(4).any(|p| p[0] == 0), "has dark modules");
     }
 

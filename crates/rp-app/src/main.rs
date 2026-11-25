@@ -591,8 +591,6 @@ struct Qr {
     img: femtovg::ImageId,
     /// Pixels (modules) per side.
     modules: usize,
-    /// The address printed under it.
-    label: String,
     /// The remote's URL version it was made from.
     version: u64,
 }
