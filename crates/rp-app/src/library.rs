@@ -231,6 +231,41 @@ impl Library {
         self.playlists.iter().position(|p| p.name == name).map_or(0, |i| i + 1)
     }
 
+    /// What differs from an earlier snapshot, in words for the log, e.g.
+    /// "playlist contents changed (Most Played)" or "2 games added".
+    pub fn changes_since(&self, old: &Library) -> String {
+        let ids = |l: &Library| l.items[..l.game_count].iter().filter_map(Item::game_id).collect::<std::collections::HashSet<_>>();
+        let (was, now) = (ids(old), ids(self));
+        let (added, removed) = (now.difference(&was).count(), was.difference(&now).count());
+        let games = |n: usize| if n == 1 { "1 game".to_string() } else { format!("{n} games") };
+        let mut parts = Vec::new();
+        if added > 0 {
+            parts.push(format!("{} added", games(added)));
+        }
+        if removed > 0 {
+            parts.push(format!("{} removed", games(removed)));
+        }
+        if added == 0 && removed == 0 && old.items[..old.game_count] != self.items[..self.game_count] {
+            parts.push("game details changed".into());
+        }
+        if old.playlists != self.playlists {
+            parts.push(format!("playlists edited (now {})", self.playlists.len()));
+        } else if old.items == self.items {
+            // Same entries, so view indices compare like for like.
+            let names: Vec<&str> = (1..self.views.len()).filter(|&n| old.views.get(n) != self.views.get(n)).map(|n| self.playlist_name(n)).collect();
+            if !names.is_empty() {
+                parts.push(format!("playlist contents changed ({})", names.join(", ")));
+            }
+        }
+        if old.functions != self.functions {
+            parts.push("button setup changed".into());
+        }
+        if parts.is_empty() {
+            parts.push("settings changed".into());
+        }
+        parts.join(", ")
+    }
+
     /// Whether playlist `n`'s view starts with a game (i.e. it isn't empty).
     pub fn has_games(&self, n: usize) -> bool {
         self.view(n).first().is_some_and(|&i| i < self.game_count)
@@ -333,6 +368,31 @@ mod tests {
         assert_eq!(view_for(2, vec![1, 0], &items, 2), [1, 0, 3, 5, 2]);
         // In All games: the games, then every playlist.
         assert_eq!(view_for(0, vec![0, 1], &items, 2), [0, 1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn change_log_names_what_changed() {
+        let item = |k| Item { title: String::new(), media_name: String::new(), media_dir: PathBuf::new(), wheel_png: None, kind: k, media_cache: MediaCache::default() };
+        let pl = |id: i64, name: &str| db::Playlist { id, name: name.into(), sql: None, logo: None };
+        let lib = || Library {
+            items: (0..3).map(|n| item(Kind::Playlist(n))).collect(),
+            game_count: 0,
+            playlists: vec![pl(1, "Favorites"), pl(2, "Most Played")],
+            views: vec![vec![1, 2], vec![0, 2], vec![0, 1]],
+            emulator_count: 1,
+            functions: Vec::new(),
+            menu_rotation: None,
+        };
+        let old = lib();
+        let mut new = lib();
+        new.views[2] = vec![1, 0];
+        assert_eq!(new.changes_since(&old), "playlist contents changed (Most Played)");
+        let mut new = lib();
+        new.playlists.pop();
+        assert_eq!(new.changes_since(&old), "playlists edited (now 1)");
+        let mut new = lib();
+        new.menu_rotation = Some(90);
+        assert_eq!(new.changes_since(&old), "settings changed");
     }
 
     #[test]
