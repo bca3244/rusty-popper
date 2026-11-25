@@ -280,19 +280,8 @@ for (const el of document.querySelectorAll("[data-key]")) {
     el.addEventListener("change", () => setting(k, el.value));
   }
 }
-let updateArmed = 0;
 $("update").addEventListener("click", () => {
-  const u = $("update"), install = u.dataset.action === "install";
-  // Installing restarts Rusty Popper: ask for a second tap.
-  if (install && Date.now() - updateArmed > 4000) {
-    updateArmed = Date.now();
-    u.classList.add("armed");
-    u.textContent = "Tap again";
-    setTimeout(() => { u.classList.remove("armed"); if (u.dataset.action === "install") u.textContent = "Install"; }, 4000);
-    return;
-  }
-  updateArmed = 0;
-  u.classList.remove("armed");
+  const install = $("update").dataset.action === "install";
   if (!install) { checkedAt = Date.now(); $("update-status").textContent = "Checking for updates…"; setTimeout(poll1, 1600); }
   if (install) say("Downloading the update. Rusty Popper restarts into it when no game is running.");
   setting("update", install ? "install" : "check");

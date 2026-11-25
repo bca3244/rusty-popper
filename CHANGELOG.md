@@ -7,6 +7,9 @@ All notable changes to Rusty Popper. Versions follow the GitHub [releases](https
 ### Added
 - **Kill a hung table from the phone remote**: a *VPinball processes* button opens a page listing every running process whose name starts with VPinball (any VPX build), plus B2SBackglassServerEXE and PinMAME, with how long each has been running. *Kill* ends one (and anything it started), *Kill all* ends them all; each needs a second tap. When the table was started from Rusty Popper, it goes back to the wheel as if the game had exited, running the emulator's close script as usual.
 
+### Changed
+- *Install* on the phone remote's Settings page installs straight away, without a second tap.
+
 ## [0.2.36] - 2026-11-25
 
 ### Fixed
