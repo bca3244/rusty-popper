@@ -281,6 +281,9 @@ fn handle(req: tiny_http::Request, shared: &Shared, tx: &Sender<Request>, pin: O
     let pin_ok = pin.is_none_or(|p| query_value(query, "pin").is_some_and(|v| v == p));
     let response = if !from_lan || !host_ok(&host, address) {
         text(403, "Forbidden")
+    } else if path == "/icon.png" || path == "/favicon.ico" || path == "/apple-touch-icon.png" {
+        // The icon needs no PIN: browsers fetch it without the page's query.
+        tiny_http::Response::from_data(crate::ICON_PNG.to_vec()).with_header(header("Content-Type", "image/png")).with_header(header("Cache-Control", "max-age=86400"))
     } else if !pin_ok {
         text(403, "Wrong or missing PIN: scan the QR code on the cabinet again")
     } else {

@@ -5,7 +5,7 @@ All notable changes to Rusty Popper. Versions follow the GitHub [releases](https
 ## [0.2.35] - 2026-11-25
 
 ### Added
-- **Settings on the phone remote**: the page has a Settings card with everything in Options (wheel style, attract mode and its timings, video volume, sound effects, game audio, DOF) as phone controls, saved to `rusty-popper.toml` just like Options. It can also check for and install updates (a second tap confirms; the install waits until no game is running). The phone remote's own on/off switch stays on the cabinet, so the page can't lock itself out. Settings open from a **Settings** button (the phone's Back button returns), and *Check* says "No new updates" when there's nothing newer.
+- **Settings on the phone remote**: the page has a Settings card with everything in Options (wheel style, attract mode and its timings, video volume, sound effects, game audio, DOF) as phone controls, saved to `rusty-popper.toml` just like Options. It can also check for and install updates (a second tap confirms; the install waits until no game is running). The phone remote's own on/off switch stays on the cabinet, so the page can't lock itself out. The page has the Rusty Popper icon (browser tab and "Add to Home Screen"). Settings open from a **Settings** button (the phone's Back button returns), and *Check* says "No new updates" when there's nothing newer.
 
 ### Fixed
 - Options now says "No new updates" instead of "Up to date" after a check that finds nothing newer.
