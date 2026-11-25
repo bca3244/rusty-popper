@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 - **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, **menu sounds** from Popper's own sound set, and each game's **Audio media** once the wheel rests on it.
 - **DOF (optional):** cabinet lights, flashers and shakers react to the menu, using your existing DOF config for Popper's menu.
 - **Works alongside VPin Studio:** hides and pauses while a table started elsewhere is on screen, so media recordings stay clean.
-- **Phone remote (optional):** scan the QR code in the corner of the wheel to see what's playing and to exit Rusty Popper, restart or shut down the cabinet from your phone.
+- **Phone remote (optional):** scan the QR code in the corner of the wheel to see what's playing, change settings, install updates, kill a hung table, and exit Rusty Popper, restart or shut down the cabinet from your phone.
 - **Play statistics** written back to Popper, so "Most Played" keeps working.
 - **Updates itself:** it tells you when a new release is out and installs it from the Options menu, and goes back to the previous version if the new one won't start.
 
