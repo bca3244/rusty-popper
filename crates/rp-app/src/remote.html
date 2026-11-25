@@ -161,14 +161,9 @@ function showSettings(st) {
     const out = document.querySelector('output[for="' + k + '"]');
     if (out) out.textContent = st[k] + "%";
   }
-  // After a check from this page, say how it went once it's done (the
-  // "Checking" text stays up long enough to read).
-  if (checkedAt && st.update_state !== "checking" && Date.now() - checkedAt > 1500) {
-    checkedAt = 0;
-    if (st.update_state === "none") say("No new updates. You're on the latest version.");
-    else if (st.update_state === "available") say(st.update.replace("Install update", "Update") + " is available.");
-    else if (st.update_state === "failed") say(st.update, true);
-  }
+  // After a check from this page, "Checking" stays up long enough to read;
+  // the status line then says how it went.
+  if (checkedAt && st.update_state !== "checking" && Date.now() - checkedAt > 1500) checkedAt = 0;
   $("update-status").textContent = updateText(st);
   const u = $("update");
   u.hidden = !st.update_action;
@@ -225,7 +220,7 @@ $("update").addEventListener("click", () => {
   updateArmed = 0;
   u.classList.remove("armed");
   if (!install) { checkedAt = Date.now(); $("update-status").textContent = "Checking for updates…"; setTimeout(poll1, 1600); }
-  say(install ? "Downloading the update. Rusty Popper restarts into it when no game is running." : "Checking for updates…");
+  if (install) say("Downloading the update. Rusty Popper restarts into it when no game is running.");
   setting("update", install ? "install" : "check");
 });
 
