@@ -787,13 +787,15 @@ fn state_path() -> PathBuf {
 }
 
 /// The app icon (copper-ring RP wheel) for the windows' title/Alt-Tab icon.
+/// The app icon as a PNG (also the phone remote's page icon).
+pub(crate) static ICON_PNG: &[u8] = include_bytes!("../assets/rusty-popper-256.png");
+
 fn window_icon() -> Option<winit::window::Icon> {
-    static PNG: &[u8] = include_bytes!("../assets/rusty-popper-256.png");
     // Decoded once and shared by every window.
     static RGBA: OnceLock<Option<(Vec<u8>, u32, u32)>> = OnceLock::new();
     let (rgba, w, h) = RGBA
         .get_or_init(|| {
-            let img = image::load_from_memory(PNG).ok()?.to_rgba8();
+            let img = image::load_from_memory(ICON_PNG).ok()?.to_rgba8();
             let (w, h) = img.dimensions();
             Some((img.into_raw(), w, h))
         })

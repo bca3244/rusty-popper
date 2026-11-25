@@ -136,7 +136,7 @@ impl App {
         match self.updater.status() {
             Off => format!("Check for updates (v{current})"),
             Checking => "Checking for updates…".into(),
-            UpToDate => format!("Up to date (v{current})"),
+            UpToDate => format!("No new updates (v{current})"),
             Available(r) => format!("Install update v{}", r.version),
             Downloading { version, percent } => format!("Downloading v{version}… {percent}%"),
             Staged { version, .. } => format!("Installing v{version}…"),
@@ -247,6 +247,87 @@ impl App {
             _ => return,
         }
         self.save_settings();
+    }
+
+    /// The Options settings, for the phone remote's Settings card.
+    pub(crate) fn settings_view(&self) -> remote::SettingsView {
+        use updater::Status::*;
+        remote::SettingsView {
+            style: self.style.key(),
+            attract: self.attract.enabled,
+            attract_idle: self.attract.idle_secs,
+            attract_interval: self.attract.interval_secs,
+            idle_choices: ATTRACT_IDLE_CHOICES,
+            interval_choices: ATTRACT_INTERVAL_CHOICES,
+            volume: self.volume,
+            sfx: self.sounds.enabled,
+            sfx_volume: self.sounds.volume,
+            game_audio: self.game_audio.enabled,
+            game_audio_volume: self.game_audio.volume,
+            dof: self.dof.enabled,
+            update: self.update_label(),
+            update_state: match self.updater.status() {
+                Off => "idle",
+                Checking => "checking",
+                UpToDate => "none",
+                Available(_) => "available",
+                Downloading { .. } | Staged { .. } | Restarting(_) => "busy",
+                Failed(_) => "failed",
+            },
+            update_action: match self.updater.status() {
+                Available(_) => "install",
+                Checking | Downloading { .. } | Staged { .. } | Restarting(_) => "",
+                _ => "check",
+            },
+        }
+    }
+
+    /// Changes one setting from the phone remote (`key` as in SettingsView),
+    /// applies it and saves it, as Options does.
+    pub(crate) fn set_from_remote(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let bad = || format!("Can't set {key} to {value}");
+        let on = || match value {
+            "on" | "true" | "1" => Ok(true),
+            "off" | "false" | "0" => Ok(false),
+            _ => Err(bad()),
+        };
+        let percent = || value.parse::<i32>().ok().filter(|v| (0..=100).contains(v)).ok_or_else(bad);
+        let choice = |choices: &[u64]| value.parse::<u64>().ok().filter(|v| choices.contains(v)).ok_or_else(bad);
+        match key {
+            "style" => self.style = WheelStyle::parse(value).ok_or_else(bad)?,
+            "attract" => self.attract.enabled = on()?,
+            "attract_idle" => self.attract.idle_secs = choice(ATTRACT_IDLE_CHOICES)?,
+            "attract_interval" => self.attract.interval_secs = choice(ATTRACT_INTERVAL_CHOICES)?,
+            "volume" => {
+                self.volume = percent()?;
+                if let Some(g) = &self.gfx {
+                    let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
+                }
+            }
+            "sfx" => self.sounds.enabled = on()?,
+            "sfx_volume" => self.sounds.set_volume(percent()?),
+            "game_audio" => self.game_audio.set_enabled(on()?),
+            "game_audio_volume" => self.game_audio.set_volume(percent()?),
+            "dof" => {
+                self.dof.set_enabled(on()?);
+                self.dof_shown = None;
+            }
+            // Installs only when the menu is up (never mid-game), as from Options.
+            "update" => {
+                match (value, self.updater.status()) {
+                    ("install", updater::Status::Available(rel)) => self.updater.download(rel),
+                    ("check", updater::Status::Checking | updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_)) => {
+                        return Err("An update is already in progress".into());
+                    }
+                    ("check", _) => self.updater.check(),
+                    _ => return Err("No update to install".into()),
+                }
+                return Ok(());
+            }
+            _ => return Err(format!("Unknown setting {key}")),
+        }
+        self.save_settings();
+        Ok(())
     }
 
     fn save_settings(&self) {
@@ -405,7 +486,12 @@ impl App {
                 self.jump_letter(1);
                 self.sounds.play(sfx::Sfx::Jump);
             }
-            ToggleStyle => self.style = self.style.toggled(),
+            // Saved like the Options row, so a later save of any other
+            // setting (here or from the phone) doesn't save it by surprise.
+            ToggleStyle => {
+                self.style = self.style.toggled();
+                self.save_settings();
+            }
             Start => {
                 if let Some(&item) = self.view.get(g.wheel.selected()) {
                     match self.lib.items[item].kind {
