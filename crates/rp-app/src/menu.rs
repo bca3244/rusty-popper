@@ -136,7 +136,7 @@ impl App {
         match self.updater.status() {
             Off => format!("Check for updates (v{current})"),
             Checking => "Checking for updates…".into(),
-            UpToDate => format!("Up to date (v{current})"),
+            UpToDate => format!("No new updates (v{current})"),
             Available(r) => format!("Install update v{}", r.version),
             Downloading { version, percent } => format!("Downloading v{version}… {percent}%"),
             Staged { version, .. } => format!("Installing v{version}…"),
@@ -266,6 +266,14 @@ impl App {
             game_audio_volume: self.game_audio.volume,
             dof: self.dof.enabled,
             update: self.update_label(),
+            update_state: match self.updater.status() {
+                Off => "idle",
+                Checking => "checking",
+                UpToDate => "none",
+                Available(_) => "available",
+                Downloading { .. } | Staged { .. } | Restarting(_) => "busy",
+                Failed(_) => "failed",
+            },
             update_action: match self.updater.status() {
                 Available(_) => "install",
                 Checking | Downloading { .. } | Staged { .. } | Restarting(_) => "",

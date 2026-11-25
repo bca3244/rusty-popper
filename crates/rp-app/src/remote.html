@@ -41,12 +41,14 @@
   input[type=checkbox]:checked::after { left: 23px; }
   #update-status { color: var(--dim); font-size: 14px; }
   button.small { width: auto; min-height: 40px; padding: 0 16px; margin: 0; }
+  button.back { margin-bottom: 4px; }
+  #open-settings { margin-bottom: 14px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Rusty Popper <small id="ver"></small></h1>
-  <section class="card">
+  <section class="card" id="game">
     <div id="state" class="state">Connecting…</div>
     <img id="wheel" alt="" hidden>
     <div id="title"></div>
@@ -54,6 +56,7 @@
     <dl id="facts"></dl>
   </section>
   <section class="card" id="settings" hidden>
+    <button class="small back" id="back">‹ Back</button>
     <h2>Wheel</h2>
     <div class="row"><label for="style">Wheel style</label>
       <select id="style" data-key="style">
@@ -70,16 +73,17 @@
     <div class="row"><label for="game_audio">Game audio</label><input type="checkbox" id="game_audio" data-key="game_audio"></div>
     <div class="row"><label for="game_audio_volume">Game audio volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
     <h2>Cabinet</h2>
-    <div class="row"><label for="dof">DOF lights</label><input type="checkbox" id="dof" data-key="dof"></div>
+    <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
     <h2>Updates</h2>
     <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
   </section>
-  <section class="card">
+  <section class="card" id="actions">
+    <button id="open-settings" hidden>Settings</button>
     <button data-cmd="exit">Exit Rusty Popper</button>
     <button data-cmd="restart" class="power">Restart cabinet</button>
     <button data-cmd="shutdown" class="power">Shut down cabinet</button>
-    <div id="msg"></div>
   </section>
+  <div id="msg"></div>
 </main>
 <script>
 "use strict";
@@ -131,7 +135,7 @@ function show(s) {
     } else img.hidden = true;
   }
   document.querySelector('[data-cmd="exit"]').disabled = s.state === "launching" || s.state === "playing" || s.state === "exiting";
-  if (s.settings && s.settings.style) showSettings(s.settings);
+  if (s.settings && s.settings.style) { const first = !haveSettings; showSettings(s.settings); if (first) route(); }
 }
 
 // Settings: shown as the cabinet has them, except a control touched in the
@@ -145,7 +149,8 @@ function fillChoices(sel, values, label) {
   sel.replaceChildren(...values.map((v) => { const o = document.createElement("option"); o.value = v; o.textContent = label(v); return o; }));
 }
 function showSettings(st) {
-  $("settings").hidden = false;
+  haveSettings = true;
+  $("open-settings").hidden = false;
   fillChoices($("attract_idle"), st.idle_choices, mins);
   fillChoices($("attract_interval"), st.interval_choices, (v) => v + " s");
   for (const el of document.querySelectorAll("[data-key]")) {
@@ -156,12 +161,37 @@ function showSettings(st) {
     const out = document.querySelector('output[for="' + k + '"]');
     if (out) out.textContent = st[k] + "%";
   }
-  $("update-status").textContent = st.update;
+  // After a check from this page, say how it went once it's done (the
+  // "Checking" text stays up long enough to read).
+  if (checkedAt && st.update_state !== "checking" && Date.now() - checkedAt > 1500) {
+    checkedAt = 0;
+    if (st.update_state === "none") say("No new updates. You're on the latest version.");
+    else if (st.update_state === "available") say(st.update.replace("Install update", "Update") + " is available.");
+    else if (st.update_state === "failed") say(st.update, true);
+  }
+  $("update-status").textContent = updateText(st);
   const u = $("update");
   u.hidden = !st.update_action;
   u.dataset.action = st.update_action;
   u.textContent = st.update_action === "install" ? "Install" : "Check";
 }
+let haveSettings = false, checkedAt = 0;
+function updateText(st) {
+  if (st.update_state === "checking" || checkedAt) return "Checking for updates…";
+  if (st.update_state === "none") return "No new updates (v" + $("ver").textContent.slice(1) + ")";
+  return st.update;
+}
+// The Settings view replaces the main one; the phone's Back button returns.
+function route() {
+  const settings = location.hash === "#settings" && haveSettings;
+  $("settings").hidden = !settings;
+  for (const id of ["game", "actions"]) $(id).hidden = settings;
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", route);
+$("open-settings").addEventListener("click", () => { location.hash = "settings"; });
+$("back").addEventListener("click", () => { history.length > 1 ? history.back() : (location.hash = ""); });
+
 async function setting(key, value) {
   touched[key] = Date.now();
   try {
@@ -194,10 +224,15 @@ $("update").addEventListener("click", () => {
   }
   updateArmed = 0;
   u.classList.remove("armed");
+  if (!install) { checkedAt = Date.now(); $("update-status").textContent = "Checking for updates…"; setTimeout(poll1, 1600); }
   say(install ? "Downloading the update. Rusty Popper restarts into it when no game is running." : "Checking for updates…");
   setting("update", install ? "install" : "check");
 });
 
+// One extra status read (e.g. to show a check's result without waiting for the next poll).
+async function poll1() {
+  try { const r = await fetch("/api/status" + q, { cache: "no-store" }); if (r.ok) show(await r.json()); } catch (e) {}
+}
 async function poll() {
   try {
     const r = await fetch("/api/status" + q, { cache: "no-store", signal: AbortSignal.timeout(4000) });

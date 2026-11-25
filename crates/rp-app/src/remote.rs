@@ -70,6 +70,9 @@ pub struct SettingsView {
     pub update: String,
     /// What the update button does now: "install", "check" or "" (busy).
     pub update_action: &'static str,
+    /// Where updates stand: "idle", "checking", "none" (no new update),
+    /// "available", "busy" (downloading or installing) or "failed".
+    pub update_state: &'static str,
 }
 
 /// A command from the page, and where to say whether it was taken.
