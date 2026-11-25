@@ -2,6 +2,12 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.36] - 2026-11-25
+
+### Fixed
+- Game audio no longer goes quiet in attract mode: each game attract mode lands on plays its Audio media, just like when you stop on it yourself.
+- Leaving attract mode with a flipper or magna-save now moves the wheel straight away, instead of the first press only waking the menu. Start, Exit and the other buttons still only wake it, so a stray press can't launch whatever game attract mode happened to be showing.
+
 ## [0.2.35] - 2026-11-25
 
 ### Added
@@ -243,6 +249,9 @@ First release.
 - Launching games through Popper's emulator scripts.
 - Play statistics written back to Popper's database.
 
+[0.2.36]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.36
+[0.2.35]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.35
+[0.2.34]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.34
 [0.2.33]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.33
 [0.2.32]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.32
 [0.2.31]: https://github.com/bca3244/rusty-popper/releases/tag/v0.2.31
