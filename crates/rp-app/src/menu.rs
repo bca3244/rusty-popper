@@ -478,7 +478,12 @@ impl App {
                 self.jump_letter(1);
                 self.sounds.play(sfx::Sfx::Jump);
             }
-            ToggleStyle => self.style = self.style.toggled(),
+            // Saved like the Options row, so a later save of any other
+            // setting (here or from the phone) doesn't save it by surprise.
+            ToggleStyle => {
+                self.style = self.style.toggled();
+                self.save_settings();
+            }
             Start => {
                 if let Some(&item) = self.view.get(g.wheel.selected()) {
                     match self.lib.items[item].kind {

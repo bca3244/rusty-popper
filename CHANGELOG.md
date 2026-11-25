@@ -7,6 +7,9 @@ All notable changes to Rusty Popper. Versions follow the GitHub [releases](https
 ### Added
 - **Settings on the phone remote**: the page has a Settings card with everything in Options (wheel style, attract mode and its timings, video volume, sound effects, game audio, DOF) as phone controls, saved to `rusty-popper.toml` just like Options. It can also check for and install updates (a second tap confirms; the install waits until no game is running). The phone remote's own on/off switch stays on the cabinet, so the page can't lock itself out.
 
+### Fixed
+- The W key's wheel style is now saved straight away, like the Options row. Before, it was only saved by accident the next time any other setting changed.
+
 ## [0.2.34] - 2026-11-25
 
 ### Added
