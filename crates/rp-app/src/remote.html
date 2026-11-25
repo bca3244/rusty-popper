@@ -46,6 +46,12 @@
   button.small { width: auto; min-height: 40px; padding: 0 16px; margin: 0; }
   button.back { margin-bottom: 4px; }
   #open-settings { margin-bottom: 14px; }
+  #open-procs { margin: -8px 0 14px; }
+  .proc { display: flex; align-items: center; gap: 12px; min-height: 52px; border-top: 1px solid var(--line); }
+  .proc:first-of-type { border-top: 0; }
+  .proc div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .proc small { display: block; color: var(--dim); }
+  #procs-empty { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -80,8 +86,17 @@
     <h2>Updates</h2>
     <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
   </section>
+  <section class="card" id="procs" hidden>
+    <button class="small back">‹ Back</button>
+    <h2>VPinball processes</h2>
+    <p>If a table hangs, kill it here. Rusty Popper then goes back to the wheel.</p>
+    <div id="proc-list"></div>
+    <div id="procs-empty" hidden>None running.</div>
+    <button id="kill-all" class="power" hidden>Kill all</button>
+  </section>
   <section class="card" id="actions">
     <button id="open-settings" hidden>Settings</button>
+    <button id="open-procs">VPinball processes</button>
     <button data-cmd="exit">Exit Rusty Popper</button>
     <button data-cmd="restart" class="power">Restart cabinet</button>
     <button data-cmd="shutdown" class="power">Shut down cabinet</button>
@@ -181,14 +196,70 @@ function updateText(st) {
 }
 // The Settings view replaces the main one; the phone's Back button returns.
 function route() {
-  const settings = location.hash === "#settings" && haveSettings;
+  const settings = location.hash === "#settings" && haveSettings, procs = location.hash === "#procs";
   $("settings").hidden = !settings;
-  for (const id of ["game", "actions"]) $(id).hidden = settings;
+  $("procs").hidden = !procs;
+  for (const id of ["game", "actions"]) $(id).hidden = settings || procs;
+  if (procs) pollProcs();
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
 $("open-settings").addEventListener("click", () => { location.hash = "settings"; });
-$("back").addEventListener("click", () => { history.length > 1 ? history.back() : (location.hash = ""); });
+$("open-procs").addEventListener("click", () => { location.hash = "procs"; });
+for (const b of document.querySelectorAll("button.back")) b.addEventListener("click", () => { history.length > 1 ? history.back() : (location.hash = ""); });
+
+// VPinball processes: read while that view is open; each Kill needs a second tap.
+let procsTimer = 0, procsArmed = null;
+async function pollProcs() {
+  clearTimeout(procsTimer);
+  if (location.hash !== "#procs") return;
+  try {
+    const r = await fetch("/api/procs" + q, { cache: "no-store" });
+    if (r.ok) showProcs(await r.json());
+  } catch (e) {}
+  procsTimer = setTimeout(pollProcs, 2000);
+}
+function showProcs(list) {
+  if (procsArmed) return; // don't redraw under a pending second tap
+  $("proc-list").replaceChildren(...list.map((p) => {
+    const row = document.createElement("div"), info = document.createElement("div"), b = document.createElement("button");
+    row.className = "proc";
+    info.textContent = p.name;
+    const sm = document.createElement("small");
+    sm.textContent = "Running " + clock(p.secs) + " · PID " + p.pid;
+    info.appendChild(sm);
+    b.className = "small power";
+    b.textContent = "Kill";
+    b.addEventListener("click", () => kill(b, String(p.pid), "Kill"));
+    row.append(info, b);
+    return row;
+  }));
+  $("procs-empty").hidden = list.length > 0;
+  $("kill-all").hidden = list.length < 2;
+}
+async function kill(b, pid, label) {
+  if (procsArmed !== b) {
+    if (procsArmed) { procsArmed.classList.remove("armed"); procsArmed.textContent = procsArmed.dataset.label; }
+    procsArmed = b;
+    b.dataset.label = label;
+    b.classList.add("armed");
+    b.textContent = "Tap again";
+    setTimeout(() => { if (procsArmed === b) { procsArmed = null; b.classList.remove("armed"); b.textContent = label; } }, 4000);
+    return;
+  }
+  procsArmed = null;
+  b.classList.remove("armed");
+  b.disabled = true;
+  say("Killing…");
+  try {
+    const r = await fetch("/api/kill" + q + (q ? "&" : "?") + "pid=" + pid, { method: "POST", headers: { "X-Rusty-Popper": "1" } });
+    const t = await r.text();
+    say(r.ok ? "Killed " + t + "." : t, !r.ok);
+  } catch (e) { say("Couldn't reach the cabinet.", true); }
+  b.disabled = false;
+  pollProcs();
+}
+$("kill-all").addEventListener("click", () => kill($("kill-all"), "all", "Kill all"));
 
 async function setting(key, value) {
   touched[key] = Date.now();
@@ -209,19 +280,8 @@ for (const el of document.querySelectorAll("[data-key]")) {
     el.addEventListener("change", () => setting(k, el.value));
   }
 }
-let updateArmed = 0;
 $("update").addEventListener("click", () => {
-  const u = $("update"), install = u.dataset.action === "install";
-  // Installing restarts Rusty Popper: ask for a second tap.
-  if (install && Date.now() - updateArmed > 4000) {
-    updateArmed = Date.now();
-    u.classList.add("armed");
-    u.textContent = "Tap again";
-    setTimeout(() => { u.classList.remove("armed"); if (u.dataset.action === "install") u.textContent = "Install"; }, 4000);
-    return;
-  }
-  updateArmed = 0;
-  u.classList.remove("armed");
+  const install = $("update").dataset.action === "install";
   if (!install) { checkedAt = Date.now(); $("update-status").textContent = "Checking for updates…"; setTimeout(poll1, 1600); }
   if (install) say("Downloading the update. Rusty Popper restarts into it when no game is running.");
   setting("update", install ? "install" : "check");
