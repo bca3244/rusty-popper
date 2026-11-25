@@ -320,6 +320,46 @@ impl OtherLaunches {
     }
 }
 
+/// A running process, for ending a hung table by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningProcess {
+    pub pid: u32,
+    pub name: String,
+    /// Seconds since it started.
+    pub secs: u64,
+}
+
+/// Whether process `name` starts with one of `prefixes` (lowercase).
+fn named_like(name: &str, prefixes: &[&str]) -> bool {
+    let name = name.to_lowercase();
+    prefixes.iter().any(|p| name.starts_with(p))
+}
+
+/// Running processes whose name starts with one of `prefixes` (lowercase),
+/// oldest first.
+pub fn processes_named(prefixes: &[&str]) -> Vec<RunningProcess> {
+    let Ok(mut sys) = System::new() else { return Vec::new() };
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let now = now_secs();
+    let mut list: Vec<RunningProcess> = sys
+        .processes()
+        .iter()
+        .map(|(pid, p)| (pid, p.name().to_string_lossy(), p.start_time()))
+        .filter(|(_, name, _)| named_like(name, prefixes))
+        .map(|(pid, name, start)| RunningProcess { pid: pid.as_u32(), name: name.into_owned(), secs: now.saturating_sub(start) })
+        .collect();
+    list.sort_by_key(|p| std::cmp::Reverse(p.secs));
+    list
+}
+
+/// Force-ends process `pid` (or, with `None`, all of them) and what it
+/// started, if its name starts with one of `prefixes`. Returns what was ended.
+pub fn end_processes(pid: Option<u32>, prefixes: &[&str]) -> Vec<RunningProcess> {
+    let doomed: Vec<RunningProcess> = processes_named(prefixes).into_iter().filter(|p| pid.is_none_or(|want| p.pid == want)).collect();
+    taskkill(&doomed.iter().map(|p| p.pid).collect::<Vec<_>>());
+    doomed
+}
+
 /// Finds and follows the game's processes.
 struct Tracker {
     sys: Option<System>,
@@ -745,6 +785,17 @@ mod tests {
         assert!(!path_under(&normalize(r"C:\vPinball\VisualPinballX\VPinballX.exe"), &dir));
         assert!(!path_under(&dir, &dir));
         assert!(!path_under(&normalize(r"C:\x.exe"), ""));
+    }
+
+    #[test]
+    fn process_names_match_on_prefix_in_any_case() {
+        let prefixes = ["vpinball", "b2sbackglassserverexe"];
+        for ok in ["VPinballX64.exe", "VPinball99_PhysMod5_Updated.exe", "vpinball8.exe", "B2SBackglassServerEXE.exe"] {
+            assert!(named_like(ok, &prefixes), "{ok}");
+        }
+        for bad in ["PinUpMenu.exe", "XVPinball.exe", "B2SServer.exe", ""] {
+            assert!(!named_like(bad, &prefixes), "{bad}");
+        }
     }
 
     #[test]

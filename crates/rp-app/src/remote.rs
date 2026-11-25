@@ -42,6 +42,10 @@ const COMMAND_HEADER: &str = "X-Rusty-Popper";
 
 static PAGE: &str = include_str!("remote.html");
 
+/// Processes the page lists and can end (a hung table): any whose name
+/// starts with one of these (lowercase).
+const KILLABLE: &[&str] = &["vpinball", "b2sbackglassserverexe", "pinmame", "vpinmame"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Exit,
@@ -292,6 +296,14 @@ fn handle(req: tiny_http::Request, shared: &Shared, tx: &Sender<Request>, pin: O
             (tiny_http::Method::Get, "/") => page(),
             (tiny_http::Method::Get, "/api/status") => status(shared),
             (tiny_http::Method::Get, "/api/wheel.png") => wheel_image(shared),
+            (tiny_http::Method::Get, "/api/procs") => procs(),
+            // Ended here, not on the menu thread (taskkill takes a moment). A
+            // game Rusty Popper started then ends as if it had exited.
+            (tiny_http::Method::Post, "/api/kill") if !has_header => text(403, "Missing header"),
+            (tiny_http::Method::Post, "/api/kill") => match kill_target(query) {
+                Some(target) => kill(target),
+                None => text(400, "Bad process"),
+            },
             (tiny_http::Method::Post, p) if p.starts_with("/api/") => match command_of(p, query) {
                 None => text(404, "Not found"),
                 Some(_) if !has_header => text(403, "Missing header"),
@@ -342,6 +354,30 @@ fn wheel_image(shared: &Shared) -> Response {
         Some(bytes) => respond(200, "image/png", bytes),
         None => text(404, "No wheel image"),
     }
+}
+
+/// The processes a hung table may have left, as JSON.
+fn procs() -> Response {
+    let list: Vec<_> = rp_launch::processes_named(KILLABLE).into_iter().map(|p| serde_json::json!({ "pid": p.pid, "name": p.name, "secs": p.secs })).collect();
+    respond(200, "application/json", serde_json::to_vec(&list).unwrap_or_default())
+}
+
+/// `pid=123` (one process) or `pid=all` (`Some(None)`).
+fn kill_target(query: &str) -> Option<Option<u32>> {
+    match query_value(query, "pid")? {
+        "all" => Some(None),
+        n => n.parse().ok().map(Some),
+    }
+}
+
+fn kill(target: Option<u32>) -> Response {
+    let ended = rp_launch::end_processes(target, KILLABLE);
+    if ended.is_empty() {
+        return text(409, "Not running any more");
+    }
+    let names: Vec<&str> = ended.iter().map(|p| p.name.as_str()).collect();
+    log::warn!("Phone remote: ending {}", names.join(", "));
+    text(200, &names.join(", "))
 }
 
 fn command_of(path: &str, query: &str) -> Option<Command> {
@@ -656,6 +692,10 @@ mod tests {
         assert_eq!(command_of("/api/set", "pin=1&key=volume&value=40"), Some(Command::Set("volume".into(), "40".into())));
         assert_eq!(command_of("/api/set", "key=volume&value=4%200"), None);
         assert_eq!(command_of("/api/set", "key=volume"), None);
+        assert_eq!(kill_target("pin=1&pid=4242"), Some(Some(4242)));
+        assert_eq!(kill_target("pid=all"), Some(None));
+        assert_eq!(kill_target("pid=-1"), None);
+        assert_eq!(kill_target(""), None);
     }
 
     #[test]
@@ -683,6 +723,9 @@ mod tests {
         assert!(ok.starts_with("HTTP/1.1 200") && ok.contains("Attack from Mars"), "{ok}");
         assert!(get("GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"));
         assert!(get("GET /?pin=9 HTTP/1.1\r\nHost: evil.example.com\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"));
+        assert!(get("POST /api/kill?pin=9&pid=all HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"), "a kill needs the header");
+        let list = get("GET /api/procs?pin=9 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        assert!(list.starts_with("HTTP/1.1 200") && list.ends_with(']'), "{list}");
         assert!(get("POST /api/exit?pin=9 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"), "a command needs the header");
         // A command reaches the menu thread, which answers it.
         let answer = std::thread::spawn(move || {
