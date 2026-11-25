@@ -516,13 +516,10 @@ impl crate::App {
     pub(crate) fn poll_remote(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         let Some(r) = self.remote.as_mut() else { return };
         let requests: Vec<Request> = std::iter::from_fn(|| r.try_recv()).collect();
-        // The page's Settings card: a couple of times a second is plenty.
-        if r.settings_due() {
-            let view = self.settings_view();
-            if let Some(r) = self.remote.as_mut() {
-                r.publish_settings(view);
-            }
-        }
+        // The page's Settings card: a couple of times a second is plenty,
+        // and at once after a change (published after the commands below).
+        let changed = requests.iter().any(|(c, _)| matches!(c, Command::Set(..)));
+        let due = r.settings_due() || changed;
         for (cmd, reply) in requests {
             log::info!("Phone remote: {cmd:?}");
             match cmd {
@@ -551,6 +548,12 @@ impl crate::App {
                         None => crate::power(el, flag),
                     }
                 }
+            }
+        }
+        if due {
+            let view = self.settings_view();
+            if let Some(r) = self.remote.as_mut() {
+                r.publish_settings(view);
             }
         }
     }
