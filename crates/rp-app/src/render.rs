@@ -339,6 +339,7 @@ impl App {
         video::reset_for_mpv(&g.gl);
         let card_out = self.card.as_ref().map(|c| c.out);
         let still = !animating && g.wheel.at_rest() && g.outs.iter().all(|o| o.slide.is_none());
+        let pf_every_frame = !still || g.outs[0].target.is_none();
         let present: Vec<(bool, bool)> = g
             .outs
             .iter()
@@ -349,7 +350,7 @@ impl App {
                 let card_changed = o.had_card.replace(card_here) != card_here;
                 let stale = o.drawn_at.get().elapsed() >= REDRAW_EVERY;
                 let render_video = fresh || o.dirty.get() || stale || o.target.is_none();
-                let every_frame = i == 0 && (!still || o.target.is_none());
+                let every_frame = i == 0 && pf_every_frame;
                 let present = every_frame || fresh || o.dirty.get() || stale || card_here || card_changed || o.slide.is_some();
                 (render_video && present, present)
             })
@@ -498,7 +499,7 @@ impl App {
         }
         // Normally the swap above waits for vsync. If the driver ignores it
         // (seen on the cabinet), pace frames to the refresh rate ourselves.
-        g.pacer.after_swap(g.frame_period, !still);
+        g.pacer.after_swap(g.frame_period, pf_every_frame);
         Ok(())
     }
 
