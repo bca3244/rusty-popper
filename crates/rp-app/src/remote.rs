@@ -43,8 +43,25 @@ const COMMAND_HEADER: &str = "X-Rusty-Popper";
 static PAGE: &str = include_str!("remote.html");
 
 /// Processes the page lists and can end (a hung table): any whose name
-/// starts with one of these (lowercase).
-const KILLABLE: &[&str] = &["vpinball", "b2sbackglassserverexe", "pinmame", "vpinmame"];
+/// starts with one of these (lowercase). Not "pinup" as a whole: that would
+/// take in PinUpDOF.exe, the DOF bridge Rusty Popper itself talks to.
+const KILLABLE: &[&str] = &[
+    // Game engines
+    "vpinball",
+    "future pinball",
+    "pinmame",
+    "vpinmame",
+    // PinUP Popper / PuP (PinUpMenu also covers PinUpMenuSetup)
+    "pinupmenu",
+    "pinupplayer",
+    "pinupdisplayer",
+    "pinuppackeditor",
+    "pupserver",
+    // DMD and backglass
+    "dmdext",
+    "flexdmd",
+    "b2sbackglassserverexe",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -696,6 +713,17 @@ mod tests {
         assert_eq!(kill_target("pid=all"), Some(None));
         assert_eq!(kill_target("pid=-1"), None);
         assert_eq!(kill_target(""), None);
+    }
+
+    #[test]
+    fn killable_names() {
+        let killable = |n: &str| KILLABLE.iter().any(|p| n.to_lowercase().starts_with(p));
+        for ok in ["VPinballX64.exe", "Future Pinball.exe", "PinUpMenu.exe", "PinUpMenuSetup.exe", "PinUpPlayer.exe", "PinUpDisplayer.exe", "PUPServer.exe", "PinUpPackEditor.exe", "dmdext.exe", "FlexDMDUI.exe", "B2SBackglassServerEXE.exe", "PinMAME32.exe"] {
+            assert!(killable(ok), "{ok}");
+        }
+        for never in ["rusty-popper.exe", "PinUpDOF.exe", "explorer.exe", "B2SServer.exe"] {
+            assert!(!killable(never), "{never}");
+        }
     }
 
     #[test]
