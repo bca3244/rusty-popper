@@ -225,8 +225,8 @@ impl App {
                 self.dof.select();
             }
         }
-        // The selected game's own audio, once the wheel rests on it (not in attract mode).
-        let selected = if self.attract_on { None } else { self.gfx.as_ref().and_then(|g| self.view.get(g.wheel.selected()).copied()) };
+        // The selected game's own audio, once the wheel rests on it (attract mode included).
+        let selected = self.gfx.as_ref().and_then(|g| self.view.get(g.wheel.selected()).copied());
         let lib = &self.lib;
         self.game_audio.tick(selected, |i| {
             let it = &lib.items[i];

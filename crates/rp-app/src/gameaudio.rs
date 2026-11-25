@@ -1,7 +1,8 @@
 //! Game audio on the wheel: Popper's per-game Audio media
 //! (`POPMedia\<emulator>\Audio\<GameName>.mp3`), played once the selection
 //! has rested on a game for a moment, so fast scrolling stays quiet. It
-//! stops on the next move, when a game launches, and during attract mode.
+//! stops on the next move and when a game launches. Attract mode plays each
+//! game's audio too, as it lands on it.
 
 use crate::mpv;
 use std::path::{Path, PathBuf};

@@ -365,10 +365,15 @@ impl App {
             }
             return;
         }
-        // Any button just wakes the menu from attract mode.
+        // Leaving attract mode: a browsing button (flippers, magna-saves)
+        // moves the wheel on from the game it's showing straight away.
+        // Anything else (Start, Exit, Info...) only wakes the menu, so
+        // a stray press never launches a game nobody picked.
         if self.attract_on {
             self.attract_on = false;
-            return;
+            if !matches!(action, Prev | Next | PagePrev | PageNext | LetterPrev | LetterNext) {
+                return;
+            }
         }
         if self.gfx.is_none() {
             return;
