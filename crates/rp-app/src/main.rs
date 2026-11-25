@@ -107,6 +107,9 @@ const GAME_UP_TIMEOUT: Duration = Duration::from_secs(60);
 /// tables can take over a minute to load on a first run (textures, shaders).
 const TABLE_UP_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long a restart or shutdown from the phone waits for a game to close.
+const POWER_WAIT: Duration = Duration::from_secs(30);
+
 /// How many restarts in a row led to this run (`--restarted`).
 static RESTARTED: AtomicU32 = AtomicU32::new(0);
 /// Set while the menu's windows are up: a crash then restarts the menu.
@@ -396,10 +399,12 @@ fn run() -> Result<()> {
         remote: None,
         remote_cfg: settings.remote,
         remote_error: None,
+        pending_power: None,
     };
     if app.remote_cfg.enabled {
         // A copy this one replaces (a restart, an update) may still hold the port.
-        app.set_remote(true, Duration::from_secs(4));
+        let replacing = args.restarted > 0 || PROBATION_ACTIVE.load(Ordering::Relaxed);
+        app.set_remote(true, if replacing { Duration::from_secs(4) } else { Duration::ZERO });
     }
     MENU_UP.store(true, Ordering::Relaxed);
     MENU_RAN.store(true, Ordering::Relaxed);
@@ -773,6 +778,9 @@ struct App {
     remote_cfg: settings::RemoteSettings,
     /// Why the phone remote couldn't start, for Options.
     remote_error: Option<String>,
+    /// A restart (`/r`) or shutdown (`/s`) from the phone, waiting for the
+    /// game to close, and when it was asked for.
+    pending_power: Option<(&'static str, Instant)>,
 }
 
 /// The file next to the exe that remembers the last playlist.

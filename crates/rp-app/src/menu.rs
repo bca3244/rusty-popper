@@ -153,7 +153,7 @@ impl App {
             "Sound \u{203a}".to_string(),
             format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
             match (&self.remote_error, self.remote.is_some()) {
-                (Some(why), _) => format!("Phone remote: On ({why})"),
+                (Some(why), _) => format!("Phone remote: can't start ({why})"),
                 (None, true) => "Phone remote: On".to_string(),
                 (None, false) => "Phone remote: Off".to_string(),
             },

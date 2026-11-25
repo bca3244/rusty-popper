@@ -95,8 +95,9 @@ struct Shared {
 pub struct Remote {
     shared: Arc<Shared>,
     rx: Receiver<Request>,
-    server: Arc<tiny_http::Server>,
+    server: Option<Arc<tiny_http::Server>>,
     thread: Option<JoinHandle<()>>,
+    port: u16,
     /// The last thing published, to skip unchanged snapshots.
     last_key: Option<(u8, usize)>,
     image_version: u64,
@@ -116,7 +117,10 @@ impl Remote {
                 Err(e) => return Err(anyhow::anyhow!("{e}")).with_context(|| format!("listening on port {port}")),
             }
         };
-        let pin = pin.filter(|p| !p.trim().is_empty());
+        let pin = pin.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        if pin.as_ref().is_some_and(|p| !p.chars().all(|c| c.is_ascii_alphanumeric())) {
+            anyhow::bail!("the PIN may only have letters and digits");
+        }
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot { state: "menu", version: env!("CARGO_PKG_VERSION"), ..Default::default() }),
             url: Mutex::new(make_url(&host_for(address.as_deref()), port, pin.as_deref())),
@@ -129,8 +133,8 @@ impl Remote {
             .name("remote".into())
             .spawn(move || serve(&worker_server, worker, tx, port, pin, address))
             .context("starting the web server thread")?;
-        let remote = Remote { shared, rx, server, thread: Some(thread), last_key: None, image_version: 0 };
-        log::info!("Phone remote on {}", remote.url().0);
+        let remote = Remote { shared, rx, server: Some(server), thread: Some(thread), port, last_key: None, image_version: first_image_version() };
+        log::info!("Phone remote on {}", short_url(&remote.url().0));
         Ok(remote)
     }
 
@@ -159,6 +163,12 @@ impl Remote {
         }
     }
 
+    /// Makes the next `publish` rebuild the snapshot even for the same key
+    /// (the database was re-read, so an index may now be another game).
+    pub fn invalidate(&mut self) {
+        self.last_key = None;
+    }
+
     /// The next command from the page, if any.
     pub fn try_recv(&self) -> Option<Request> {
         self.rx.try_recv().ok()
@@ -168,11 +178,19 @@ impl Remote {
 impl Drop for Remote {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
-        // Wakes the thread at once, so the port is free again when this returns.
-        self.server.unblock();
+        // Wakes our thread at once.
+        if let Some(s) = &self.server {
+            s.unblock();
+        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+        // Dropping the server closes the listener only once tiny_http's
+        // accept thread wakes. It wakes itself by connecting to the address
+        // it listens on, 0.0.0.0, which Windows refuses: wake it through
+        // localhost instead, so the port is free when this returns.
+        drop(self.server.take());
+        let _ = std::net::TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, self.port)), Duration::from_millis(300));
     }
 }
 
@@ -185,14 +203,14 @@ fn serve(server: &tiny_http::Server, shared: Arc<Shared>, tx: Sender<Request>, p
             let url = make_url(&host_for(address.as_deref()), port, pin.as_deref());
             if let Ok(mut u) = shared.url.lock() {
                 if *u != url {
-                    log::info!("Phone remote moved to {url}");
+                    log::info!("Phone remote moved to {}", short_url(&url));
                     *u = url;
                     shared.url_version.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
         match server.recv_timeout(TICK) {
-            Ok(Some(req)) => handle(req, &shared, &tx, pin.as_deref()),
+            Ok(Some(req)) => handle(req, &shared, &tx, pin.as_deref(), address.as_deref()),
             Ok(None) => {}
             Err(_) if shared.stop.load(Ordering::Relaxed) => break,
             Err(e) => {
@@ -204,13 +222,13 @@ fn serve(server: &tiny_http::Server, shared: Arc<Shared>, tx: Sender<Request>, p
     log::info!("Phone remote stopped");
 }
 
-fn handle(req: tiny_http::Request, shared: &Shared, tx: &Sender<Request>, pin: Option<&str>) {
+fn handle(req: tiny_http::Request, shared: &Shared, tx: &Sender<Request>, pin: Option<&str>, address: Option<&str>) {
     let from_lan = req.remote_addr().is_some_and(|a| is_local(a.ip()));
     let host = req.headers().iter().find(|h| h.field.equiv("Host")).map(|h| h.value.as_str().to_string()).unwrap_or_default();
     let (path, query) = req.url().split_once('?').unwrap_or((req.url(), ""));
     let path = path.to_string();
     let pin_ok = pin.is_none_or(|p| query_value(query, "pin").is_some_and(|v| v == p));
-    let response = if !from_lan || !host_ok(&host) {
+    let response = if !from_lan || !host_ok(&host, address) {
         text(403, "Forbidden")
     } else if !pin_ok {
         text(403, "Wrong or missing PIN: scan the QR code on the cabinet again")
@@ -310,14 +328,14 @@ fn is_local(ip: IpAddr) -> bool {
     }
 }
 
-/// Whether the Host header names this machine: an IP address, localhost, or
-/// the computer's name (with or without a local domain). A name that points
-/// here by trickery (DNS rebinding) is turned away.
-fn host_ok(host: &str) -> bool {
-    host_ok_for(host, &std::env::var("COMPUTERNAME").unwrap_or_default())
+/// Whether the Host header names this machine: an IP address, localhost, the
+/// configured `address`, or the computer's name (bare, or in a home-network
+/// domain). Any other name pointing here (DNS rebinding) is turned away.
+fn host_ok(host: &str, address: Option<&str>) -> bool {
+    host_ok_for(host, &std::env::var("COMPUTERNAME").unwrap_or_default(), address)
 }
 
-fn host_ok_for(host: &str, computer: &str) -> bool {
+fn host_ok_for(host: &str, computer: &str, address: Option<&str>) -> bool {
     let name = if let Some(rest) = host.strip_prefix('[') {
         // [v6]:port
         return rest.split(']').next().is_some_and(|ip| ip.parse::<std::net::Ipv6Addr>().is_ok());
@@ -327,8 +345,12 @@ fn host_ok_for(host: &str, computer: &str) -> bool {
     if name.parse::<Ipv4Addr>().is_ok() || name.eq_ignore_ascii_case("localhost") {
         return true;
     }
-    let first = name.split('.').next().unwrap_or("");
-    !computer.is_empty() && first.eq_ignore_ascii_case(computer)
+    if address.is_some_and(|a| a.trim().eq_ignore_ascii_case(name)) {
+        return true;
+    }
+    let (first, domain) = name.split_once('.').unwrap_or((name, ""));
+    let home_domain = ["", "local", "lan", "home", "home.arpa", "localdomain"].iter().any(|d| domain.eq_ignore_ascii_case(d));
+    !computer.is_empty() && first.eq_ignore_ascii_case(computer) && home_domain
 }
 
 /// The host the QR code links to: the configured one, else this machine's
@@ -343,7 +365,7 @@ fn host_for(address: Option<&str>) -> String {
 /// This machine's address on the network the default route uses. Connecting
 /// a UDP socket sends nothing; it only picks the outgoing interface.
 fn lan_ip() -> Option<IpAddr> {
-    ["8.8.8.8:80", "192.168.0.1:80", "10.0.0.1:80"].iter().find_map(|target| {
+    ["8.8.8.8:80", "192.168.1.1:80", "192.168.0.1:80", "10.0.0.1:80", "172.16.0.1:80"].iter().find_map(|target| {
         let s = UdpSocket::bind("0.0.0.0:0").ok()?;
         s.connect(target).ok()?;
         let ip = s.local_addr().ok()?.ip();
@@ -375,6 +397,13 @@ pub fn qr_rgba(text: &str) -> Option<(Vec<u8>, usize)> {
         }
     }
     Some((rgba, n))
+}
+
+/// Where the wheel-image counter starts: different for every start, so a
+/// page left open across a restart can't mistake the new game's number for
+/// the old one's.
+fn first_image_version() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(1, |d| d.as_secs()) * 1000
 }
 
 /// The part of a URL to print under the QR code: host and port.
@@ -419,7 +448,8 @@ impl crate::App {
             Ok(r) => self.remote = Some(r),
             Err(e) => {
                 log::warn!("Phone remote: {e:#}");
-                self.remote_error = Some(format!("port {} in use", c.port));
+                let pin_bad = e.chain().any(|c| c.to_string().contains("PIN"));
+                self.remote_error = Some(if pin_bad { "PIN: letters and digits only".into() } else { format!("port {} busy", c.port) });
             }
         }
     }
@@ -438,13 +468,19 @@ impl crate::App {
                     let _ = reply.send(Ok(()));
                     el.exit();
                 }
-                Command::Restart => {
+                Command::Restart | Command::Shutdown => {
+                    let flag = if cmd == Command::Restart { "/r" } else { "/s" };
                     let _ = reply.send(Ok(()));
-                    crate::power(el, "/r");
-                }
-                Command::Shutdown => {
-                    let _ = reply.send(Ok(()));
-                    crate::power(el, "/s");
+                    match &self.playing {
+                        // Close the game properly first (its close script, the
+                        // play statistics); return_from_game then powers off.
+                        Some(p) => {
+                            log::info!("Phone remote: closing the game before {flag}");
+                            p.ctl.request_stop();
+                            self.pending_power = Some((flag, std::time::Instant::now()));
+                        }
+                        None => crate::power(el, flag),
+                    }
                 }
             }
         }
@@ -455,7 +491,9 @@ impl crate::App {
     pub(crate) fn publish_remote(&mut self, state: u8, index: Option<usize>, since: Option<std::time::Instant>, note: Option<&str>) {
         let Some(r) = self.remote.as_mut() else { return };
         let lib = &self.lib;
-        r.publish((state, index.unwrap_or(usize::MAX)), || {
+        // Without an item, the note tells snapshots apart.
+        let key = index.unwrap_or_else(|| note.map_or(usize::MAX, |n| n.bytes().fold(5381usize, |h, b| h.wrapping_mul(33) ^ b as usize)));
+        r.publish((state, key), || {
             let item = index.and_then(|i| lib.items.get(i));
             let (game, note) = match item.map(|it| (it, &it.kind)) {
                 Some((it, crate::Kind::Game { game, emu })) => (
@@ -509,14 +547,16 @@ mod tests {
 
     #[test]
     fn host_must_name_this_machine() {
-        assert!(host_ok_for("192.168.1.20:8642", "GAMING"));
-        assert!(host_ok_for("localhost:8642", "GAMING"));
-        assert!(host_ok_for("gaming:8642", "GAMING"));
-        assert!(host_ok_for("gaming.lan", "GAMING"));
-        assert!(host_ok_for("[fe80::1]:8642", "GAMING"));
-        assert!(!host_ok_for("evil.example.com:8642", "GAMING"));
-        assert!(!host_ok_for("", "GAMING"));
-        assert!(!host_ok_for("gaming", ""));
+        assert!(host_ok_for("192.168.1.20:8642", "GAMING", None));
+        assert!(host_ok_for("localhost:8642", "GAMING", None));
+        assert!(host_ok_for("gaming:8642", "GAMING", None));
+        assert!(host_ok_for("gaming.lan", "GAMING", None));
+        assert!(host_ok_for("[fe80::1]:8642", "GAMING", None));
+        assert!(host_ok_for("pinball.lan:8642", "DESKTOP-XYZ", Some("pinball.lan")));
+        assert!(!host_ok_for("gaming.evil.com:8642", "GAMING", None));
+        assert!(!host_ok_for("evil.example.com:8642", "GAMING", None));
+        assert!(!host_ok_for("", "GAMING", None));
+        assert!(!host_ok_for("gaming", "", None));
     }
 
     #[test]

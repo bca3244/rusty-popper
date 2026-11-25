@@ -16,6 +16,9 @@
 .PARAMETER Port
     The phone remote's port ([remote] port in rusty-popper.toml). Default 8642.
 
+.PARAMETER ExePath
+    Path to rusty-popper.exe. Defaults to the copy next to this script.
+
 .PARAMETER Remove
     Remove the rule again.
 
@@ -44,13 +47,16 @@ if (-not $isAdmin -and -not $WhatIfPreference) {
     exit
 }
 
-if ($PSCmdlet.ShouldProcess($RuleName, 'Remove the old rule')) {
-    Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+try {
+$old = Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue
+if ($old -and $PSCmdlet.ShouldProcess($RuleName, 'Remove the old rule')) {
+    $old | Remove-NetFirewallRule
+    if ($Remove) { Write-Host "Removed '$RuleName'." }
+} elseif ($Remove -and -not $old) {
+    Write-Host "No '$RuleName' rule found, nothing to remove."
 }
 
-if ($Remove) {
-    Write-Host "Removed '$RuleName'."
-} else {
+if (-not $Remove) {
     if (-not (Test-Path $ExePath)) { throw "rusty-popper.exe not found at $ExePath (pass -ExePath)" }
     $ExePath = (Resolve-Path $ExePath).Path
 
@@ -70,4 +76,8 @@ if ($Remove) {
         Write-Host "Added '$RuleName': TCP $Port, local network only."
     }
 }
-if ($isAdmin -and -not $WhatIfPreference) { Start-Sleep -Seconds 3 }  # let the elevated window be read
+} catch {
+    Write-Host $_ -ForegroundColor Red
+} finally {
+    if ($isAdmin -and -not $WhatIfPreference) { Start-Sleep -Seconds 5 }  # let the elevated window be read
+}
