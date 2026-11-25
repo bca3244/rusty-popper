@@ -152,6 +152,12 @@ impl App {
             "Attract mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
             format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
+            match (&self.remote_error, self.remote.is_some()) {
+                (Some(why), _) => format!("Phone remote: can't start ({why})"),
+                // The address, for typing in when the QR code won't scan.
+                (None, true) => format!("Phone remote: On \u{b7} {}", self.remote.as_ref().map_or(String::new(), |r| remote::short_url(&r.url().0).to_string())),
+                (None, false) => "Phone remote: Off".to_string(),
+            },
             self.update_label(),
             "Back".to_string(),
         ]
@@ -192,6 +198,10 @@ impl App {
                 self.dof_shown = None;
             }
             4 => {
+                let on = !self.remote_cfg.enabled;
+                self.set_remote(on, Duration::ZERO);
+            }
+            5 => {
                 match self.updater.status() {
                     updater::Status::Available(rel) => self.updater.download(rel),
                     updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
@@ -251,6 +261,7 @@ impl App {
             game_audio: self.game_audio.enabled,
             game_audio_volume: self.game_audio.volume,
             dof: self.dof.enabled,
+            remote: self.remote_cfg.enabled,
         };
         if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
             log::warn!("Couldn't save settings: {e:#}");

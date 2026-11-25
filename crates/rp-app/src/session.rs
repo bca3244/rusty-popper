@@ -69,6 +69,22 @@ impl App {
             }
         }
         let launching = phase == Phase::Launching || (phase == Phase::Playing && !p.table_up);
+        let state = match phase {
+            Phase::Exiting => remote::EXITING,
+            _ if launching => remote::LAUNCHING,
+            _ => remote::PLAYING,
+        };
+        let (index, since) = (p.index, p.since);
+        self.publish_remote(state, Some(index), Some(since), None);
+        // A restart or shutdown from the phone doesn't wait forever on a game
+        // that won't close.
+        if self.pending_power.is_some_and(|(_, at)| at.elapsed() >= POWER_WAIT) {
+            let (flag, _) = self.pending_power.take().expect("checked above");
+            log::warn!("The game didn't close in time: {flag} anyway");
+            power(el, flag);
+            return Ok(());
+        }
+        let Some(p) = self.playing.as_mut() else { return Ok(()) };
         if let Some(g) = self.gfx.as_mut() {
             // Popper's "Exit Emulators" button closes the game, whichever
             // window has the focus (ignored for a moment after Start).
@@ -233,6 +249,10 @@ impl App {
         self.key_repeat.clear();
         self.joy_blocked = false;
         g.last = now;
+        // The phone remote asked for a restart or shutdown during the game.
+        if let Some((flag, _)) = self.pending_power.take() {
+            power(el, flag);
+        }
     }
 
     /// One frame while a game is loading, running or closing: the launch /

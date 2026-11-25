@@ -147,6 +147,7 @@ impl App {
             outs,
             context,
             revealed: false,
+            qr: None,
             gl,
             _loader: loader,
             canvas,
@@ -173,12 +174,15 @@ impl App {
 
     pub(crate) fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let frame_start = Instant::now();
+        self.poll_remote(el);
         // While a game runs, keep our windows up behind it (black, with a
         // "Launching" screen on the playfield) so the desktop never shows.
         if self.playing.is_some() {
             return self.frame_playing(el);
         }
         if self.watch_other_launch() {
+            let name = self.aside.as_ref().map(|a| a.name.clone());
+            self.publish_remote(remote::OTHER, None, None, name.as_deref());
             self.game_audio.tick(None, |_| None);
             // Nothing to draw or listen to until that table closes.
             el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250)));
@@ -211,6 +215,9 @@ impl App {
             return Ok(()); // a button just launched a game
         }
         self.attract_tick();
+        if let Some(shown) = self.gfx.as_ref().map(|g| g.shown) {
+            self.publish_remote(remote::MENU, Some(shown), None, None);
+        }
         // DOF: a new random effect for each game or playlist the wheel settles on.
         if let Some(g) = &self.gfx {
             if self.dof_shown != Some(g.shown) {
@@ -436,6 +443,21 @@ impl App {
         g.canvas.save();
         let (lw, lh) = face_player(&mut g.canvas, w, h, pf_rot);
         let letter = self.letter.map(|(c, at)| (c, at.elapsed().as_secs_f32()));
+        // The phone remote's QR code, (re)made when the remote starts or its address changes.
+        match &self.remote {
+            Some(r) if g.qr.as_ref().map(|q| q.version) != Some(r.url_version()) => {
+                if let Some(old) = g.qr.take() {
+                    g.canvas.delete_image(old.img);
+                }
+                let (url, version) = r.url();
+                g.qr = remote::qr_rgba(&url).and_then(|(rgba, n)| {
+                    use femtovg::rgb::FromSlice;
+                    let img = g.canvas.create_image(femtovg::imgref::Img::new(rgba.as_rgba(), n, n), ImageFlags::NEAREST).ok()?;
+                    Some(Qr { img, modules: n, version })
+                });
+            }
+            _ => {}
+        }
         let frame = wheel::Frame {
             style,
             wheel: &g.wheel,
@@ -449,6 +471,7 @@ impl App {
                 updater::Status::Downloading { percent, .. } => Some(format!("DOWNLOADING UPDATE {percent}%")),
                 _ => None,
             },
+            qr: g.qr.as_ref().filter(|_| self.remote.is_some()).map(|q| (q.img, q.modules)),
         };
         wheel::draw(&mut g.canvas, lw, lh, &frame);
         if let Some(menu) = &self.menu {

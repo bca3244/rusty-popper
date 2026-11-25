@@ -36,6 +36,12 @@
 //! enabled = true    # menu sound effects (Popper's PinUpMenu sounds)
 //! volume = 30
 //! # dir = 'C:\vPinball\PinUPSystem\PUPVideos\PinUpMenu\PuPSounds'
+//!
+//! [remote]
+//! enabled = false   # phone remote web page (also in Options)
+//! port = 8642
+//! # pin = '1234'
+//! # address = '192.168.1.20'
 //! ```
 
 use serde::Deserialize;
@@ -246,6 +252,48 @@ pub struct DofSettings {
     pub enabled: bool,
 }
 
+/// `[remote]`: the phone remote, a small web page on the home network.
+#[derive(Debug, Deserialize)]
+pub struct RemoteSettings {
+    /// Off unless turned on (Options or here).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Fixed, so the link and QR code never change.
+    #[serde(default = "default_remote_port")]
+    pub port: u16,
+    /// Optional: when set, the page only answers with `?pin=` matching (the
+    /// QR code includes it). Letters and digits; `pin = 1234` works too.
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub pin: Option<String>,
+    /// Optional: the host the QR code links to (default: this machine's
+    /// address on the home network).
+    pub address: Option<String>,
+}
+
+/// A PIN written as text or as a bare number.
+fn string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Pin {
+        Text(String),
+        Number(u64),
+    }
+    Ok(Option::<Pin>::deserialize(d)?.map(|p| match p {
+        Pin::Text(t) => t,
+        Pin::Number(n) => n.to_string(),
+    }))
+}
+
+fn default_remote_port() -> u16 {
+    crate::remote::DEFAULT_PORT
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        RemoteSettings { enabled: false, port: default_remote_port(), pin: None, address: None }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -268,6 +316,8 @@ pub struct Settings {
     pub update: UpdateSettings,
     #[serde(default)]
     pub dof: DofSettings,
+    #[serde(default)]
+    pub remote: RemoteSettings,
 }
 
 impl Settings {
@@ -308,6 +358,7 @@ pub struct Editable {
     pub game_audio: bool,
     pub game_audio_volume: i32,
     pub dof: bool,
+    pub remote: bool,
 }
 
 /// `text` (the current file contents) with the editable values set, keeping
@@ -331,6 +382,7 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("sound", "game_audio", v.game_audio.into());
     set("sound", "game_audio_volume", (v.game_audio_volume as i64).into());
     set("dof", "enabled", v.dof.into());
+    set("remote", "enabled", v.remote.into());
     Ok(doc.to_string())
 }
 
@@ -385,6 +437,10 @@ mod tests {
         assert!(s.input.joystick_needs_focus && s.input.keyboard_quit);
         assert!(s.attract.enabled);
         assert!(!s.dof.enabled, "DOF is off by default");
+        assert!(!s.remote.enabled && s.remote.pin.is_none(), "the phone remote is off, with no PIN, by default");
+        assert_eq!(s.remote.port, crate::remote::DEFAULT_PORT);
+        assert_eq!(Settings::parse("[remote]\npin = 1234\n").unwrap().remote.pin.as_deref(), Some("1234"));
+        assert_eq!(Settings::parse("[remote]\npin = 'ab12'\n").unwrap().remote.pin.as_deref(), Some("ab12"));
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs), (180, 12));
         assert!(s.launch.ignore_processes.is_empty() && s.paths.popper_dir.is_none());
         assert!(Settings::parse("[wheel\nstyle=").is_err());
@@ -406,7 +462,7 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true };
+        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
@@ -415,6 +471,7 @@ mod tests {
         assert!(!s.attract.enabled);
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
         assert!(s.dof.enabled);
+        assert!(s.remote.enabled);
     }
 
     #[test]
@@ -422,7 +479,7 @@ mod tests {
         let mut style = WheelStyle::Arc;
         for _ in 0..4 {
             assert_eq!(WheelStyle::parse(style.key()), Some(style));
-            let v = Editable { style, attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false };
+            let v = Editable { style, attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
             let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap()).unwrap();
             assert_eq!(s.wheel.style, style);
             style = style.toggled();

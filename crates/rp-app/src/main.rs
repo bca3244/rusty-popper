@@ -27,6 +27,7 @@ mod mpv;
 mod overlay;
 mod perf;
 mod reload;
+mod remote;
 mod render;
 mod session;
 mod settings;
@@ -105,6 +106,9 @@ const GAME_UP_TIMEOUT: Duration = Duration::from_secs(60);
 /// covered the playfield by then, it switches to "Exiting" anyway. Big
 /// tables can take over a minute to load on a first run (textures, shaders).
 const TABLE_UP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a restart or shutdown from the phone waits for a game to close.
+const POWER_WAIT: Duration = Duration::from_secs(30);
 
 /// How many restarts in a row led to this run (`--restarted`).
 static RESTARTED: AtomicU32 = AtomicU32::new(0);
@@ -392,7 +396,16 @@ fn run() -> Result<()> {
         aside: None,
         last_aside_check: now,
         quiet_until: now,
+        remote: None,
+        remote_cfg: settings.remote,
+        remote_error: None,
+        pending_power: None,
     };
+    if app.remote_cfg.enabled {
+        // A copy this one replaces (a restart, an update) may still hold the port.
+        let replacing = args.restarted > 0 || PROBATION_ACTIVE.load(Ordering::Relaxed);
+        app.set_remote(true, if replacing { Duration::from_secs(4) } else { Duration::ZERO });
+    }
     MENU_UP.store(true, Ordering::Relaxed);
     MENU_RAN.store(true, Ordering::Relaxed);
     let ran = event_loop.run_app(&mut app);
@@ -569,6 +582,17 @@ struct Gfx {
     context: PossiblyCurrentContext,
     /// Whether the windows have been shown (after the first frame).
     revealed: bool,
+    /// The phone remote's QR code texture, while the remote is on.
+    qr: Option<Qr>,
+}
+
+/// The phone remote's QR code, as uploaded for drawing.
+struct Qr {
+    img: femtovg::ImageId,
+    /// Pixels (modules) per side.
+    modules: usize,
+    /// The remote's URL version it was made from.
+    version: u64,
 }
 
 impl Gfx {
@@ -604,7 +628,7 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 6; // style, attract (submenu), sound (submenu), DOF, update, back
+const OPTION_ROWS: usize = 7; // style, attract (submenu), sound (submenu), DOF, phone remote, update, back
 /// The Options rows that open the Attract mode and Sound submenus.
 const ATTRACT_ROW: usize = 1;
 const SOUND_ROW: usize = 2;
@@ -746,6 +770,15 @@ struct App {
     last_aside_check: Instant,
     /// No taking the focus back from the desktop before this.
     quiet_until: Instant,
+    /// The phone remote's web server, while it's on.
+    remote: Option<remote::Remote>,
+    /// `[remote]` from rusty-popper.toml (`enabled` follows Options).
+    remote_cfg: settings::RemoteSettings,
+    /// Why the phone remote couldn't start, for Options.
+    remote_error: Option<String>,
+    /// A restart (`/r`) or shutdown (`/s`) from the phone, waiting for the
+    /// game to close, and when it was asked for.
+    pending_power: Option<(&'static str, Instant)>,
 }
 
 /// The file next to the exe that remembers the last playlist.
@@ -847,6 +880,8 @@ impl ApplicationHandler for App {
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
         MENU_UP.store(false, Ordering::Relaxed);
+        // Frees the port at once, for a copy started by a restart or update.
+        self.remote = None;
         self.dof.shutdown();
         self.shutdown();
     }

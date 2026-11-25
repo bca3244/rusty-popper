@@ -90,6 +90,11 @@ impl App {
             None => it.is_playlist() && Some(&it.title) == cur_title.as_ref(),
         };
         let pos = self.view.iter().position(|&i| same(&self.lib.items[i])).unwrap_or(0);
+        if !same_items {
+            if let Some(r) = self.remote.as_mut() {
+                r.invalidate();
+            }
+        }
         let Some(g) = self.gfx.as_mut() else { return };
         if !same_items {
             g.release_logos(None);

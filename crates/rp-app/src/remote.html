@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Rusty Popper</title>
+<style>
+  :root { --bg: #0e1116; --card: #181c24; --line: #2a303c; --text: #eef1f6; --dim: #9aa3b2; --copper: #d08a4e; --danger: #d9534f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; color: var(--copper); margin: 4px 0 14px; display: flex; justify-content: space-between; }
+  h1 small { color: var(--dim); letter-spacing: 0; text-transform: none; font-weight: 400; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .state { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
+  .state.live { color: #7fd17f; }
+  #wheel { display: block; max-width: 70%; max-height: 160px; margin: 12px auto 6px; }
+  #title { font-size: 22px; font-weight: 650; margin: 6px 0 2px; }
+  #sub { color: var(--dim); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 12px 0 0; font-size: 14px; }
+  dt { color: var(--dim); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  .tags span { display: inline-block; background: #262c38; border-radius: 10px; padding: 1px 9px; margin: 0 4px 4px 0; font-size: 13px; }
+  button { width: 100%; min-height: 52px; margin: 6px 0; border-radius: 12px; border: 1px solid var(--line); background: #222834; color: var(--text); font: inherit; font-weight: 600; }
+  button.power { border-color: #5a2a2a; }
+  button.armed { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button:disabled { opacity: .5; }
+  #msg { min-height: 1.4em; color: var(--dim); text-align: center; font-size: 14px; }
+  #msg.err { color: #ff8a80; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rusty Popper <small id="ver"></small></h1>
+  <section class="card">
+    <div id="state" class="state">Connecting…</div>
+    <img id="wheel" alt="" hidden>
+    <div id="title"></div>
+    <div id="sub"></div>
+    <dl id="facts"></dl>
+  </section>
+  <section class="card">
+    <button data-cmd="exit">Exit Rusty Popper</button>
+    <button data-cmd="restart" class="power">Restart cabinet</button>
+    <button data-cmd="shutdown" class="power">Shut down cabinet</button>
+    <div id="msg"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const pin = new URLSearchParams(location.search).get("pin");
+const q = pin ? "?pin=" + encodeURIComponent(pin) : "";
+const $ = (id) => document.getElementById(id);
+const labels = { menu: "On the wheel", launching: "Launching", playing: "Playing", exiting: "Exiting", other: "A table is running" };
+let imageShown = -1, offline = false;
+
+function clock(s) {
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(sec).padStart(2, "0");
+}
+
+function fact(name, value) {
+  if (value === null || value === undefined || value === "") return;
+  const dt = document.createElement("dt"), dd = document.createElement("dd");
+  dt.textContent = name;
+  if (Array.isArray(value)) {
+    dd.className = "tags";
+    for (const t of value) { const s = document.createElement("span"); s.textContent = t; dd.appendChild(s); }
+  } else dd.textContent = value;
+  $("facts").append(dt, dd);
+}
+
+function show(s) {
+  $("ver").textContent = "v" + s.version;
+  const live = s.state !== "menu";
+  $("state").textContent = (labels[s.state] || s.state) + (s.secs != null && live ? " · " + clock(s.secs) : "");
+  $("state").className = "state" + (live ? " live" : "");
+  const g = s.game;
+  $("title").textContent = g ? g.title : (s.note || "");
+  $("sub").textContent = g ? [g.manufacturer, g.year].filter(Boolean).join(" · ") : (s.state === "other" ? "Started outside Rusty Popper" : "");
+  $("facts").replaceChildren();
+  if (g) {
+    fact("System", g.emulator);
+    fact("Players", g.players);
+    fact("ROM", g.rom);
+    fact("File", g.file);
+    fact("Tags", g.tags && g.tags.length ? g.tags : null);
+  }
+  if (s.image !== imageShown) {
+    imageShown = s.image;
+    const img = $("wheel");
+    if (g) {
+      img.onload = () => { img.hidden = false; };
+      img.onerror = () => { img.hidden = true; };
+      img.src = "/api/wheel.png" + q + (q ? "&" : "?") + "v=" + s.image;
+    } else img.hidden = true;
+  }
+  document.querySelector('[data-cmd="exit"]').disabled = s.state === "launching" || s.state === "playing" || s.state === "exiting";
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/status" + q, { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    if (r.status === 403) { offline = true; $("state").textContent = await r.text(); $("state").className = "state"; }
+    else if (!r.ok) throw new Error(await r.text());
+    else {
+      show(await r.json());
+      if (offline) { offline = false; say(""); }
+    }
+  } catch (e) {
+    offline = true;
+    $("state").textContent = "Cabinet not reachable";
+    $("state").className = "state";
+  }
+  setTimeout(poll, document.hidden ? 10000 : 2000);
+}
+
+function say(text, err) { $("msg").textContent = text; $("msg").className = err ? "err" : ""; }
+
+// Every button needs a second tap within 4 seconds.
+let armed = null, armTimer = 0;
+const names = { exit: "Exit Rusty Popper", restart: "Restart cabinet", shutdown: "Shut down cabinet" };
+function disarm() {
+  if (armed) { armed.classList.remove("armed"); armed.textContent = names[armed.dataset.cmd]; }
+  armed = null;
+  clearTimeout(armTimer);
+}
+for (const b of document.querySelectorAll("button[data-cmd]")) {
+  b.addEventListener("click", async () => {
+    if (armed !== b) {
+      disarm();
+      armed = b;
+      b.classList.add("armed");
+      b.textContent = "Tap again to " + names[b.dataset.cmd].toLowerCase();
+      armTimer = setTimeout(disarm, 4000);
+      return;
+    }
+    disarm();
+    say("Sending…");
+    try {
+      const r = await fetch("/api/" + b.dataset.cmd + q, { method: "POST", headers: { "X-Rusty-Popper": "1" } });
+      const t = await r.text();
+      const live = $("state").classList.contains("live");
+      if (r.ok) say(b.dataset.cmd === "exit" ? "Rusty Popper is closing." : (live ? "Closing the game, then " : "The cabinet is ") + (b.dataset.cmd === "restart" ? "restarting." : "shutting down."));
+      else say(t, true);
+    } catch (e) { say("Couldn't reach the cabinet.", true); }
+  });
+}
+poll();
+</script>
+</body>
+</html>

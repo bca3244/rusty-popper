@@ -15,6 +15,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 - **Jump by letter** on the magna-saves, **Game Info / Help cards**, **attract mode**, **menu sounds** from Popper's own sound set, and each game's **Audio media** once the wheel rests on it.
 - **DOF (optional):** cabinet lights, flashers and shakers react to the menu, using your existing DOF config for Popper's menu.
 - **Works alongside VPin Studio:** hides and pauses while a table started elsewhere is on screen, so media recordings stay clean.
+- **Phone remote (optional):** scan the QR code in the corner of the wheel to see what's playing and to exit Rusty Popper, restart or shut down the cabinet from your phone.
 - **Play statistics** written back to Popper, so "Most Played" keeps working.
 - **Updates itself:** it tells you when a new release is out and installs it from the Options menu, and goes back to the previous version if the new one won't start.
 
@@ -32,6 +33,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
    - `libmpv-2.dll`, the video player library it needs (keep it next to the exe)
    - `rusty-popper.toml`, your settings, and `rusty-popper.example.toml`, which lists every option
    - `Enable-RustyPopperStartup.ps1` and `Disable-RustyPopperStartup.ps1`, for starting at boot
+   - `Allow-RustyPopperRemote.ps1`, to let the phone remote through the Windows firewall
 3. **Close Popper** if it's running, then **run `rusty-popper.exe`** to try it.
    - It finds Popper by itself: the default `C:\vPinball\PinUPSystem` first, then where Windows has PinUpPlayer registered, then the usual install folders on every drive. If it had to search, the folder it found is saved to `rusty-popper.toml` so the next start goes straight there.
    - If it can't start (Popper not found, `libmpv-2.dll` missing), it shows an error screen on the playfield saying why (any button closes it). More detail is in `rusty-popper.log` next to the exe.
@@ -71,9 +73,17 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 - **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume. Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
+- **Phone remote** on or off (off by default; see below)
 - Install update / check for updates
 
 **DOF (cabinet lights, flashers, shakers and other toys)** is optional and off until you turn it on in Options. Rusty Popper drives DOF the way Popper's menu does, using the **PinUP Menu** table (ROM `pinupmenu`) from the DOF Config Tool, so your existing config works as it is: flashes for wheel and page moves (`E800`, `E801`, `E804`, `E805`), a random effect (`E901` to `E990`) for each game the wheel stops on, DOF handed to the table while a game runs, and everything off when the menu exits. It uses Popper's DOF bridge (`PinUPDOF.DOFLink`) if it's there, otherwise DOF's own COM object (`DirectOutput.ComObject`, registered for 64-bit). If neither is installed, nothing happens. There's no lighting setup in Rusty Popper itself; change effects in the DOF Config Tool.
+
+**Phone remote** is optional and off until you turn it on in Options. It's a small web page on your home network that shows the game being played (or the one on the wheel) with its details and play time, and has *Exit Rusty Popper*, *Restart cabinet* and *Shut down cabinet* buttons. Each button needs a second tap to confirm. *Exit* is greyed out while a game is running; *Restart* and *Shut down* close the game properly first (its close script and play statistics), then power off. A small QR code in the top-right corner of the wheel, beside the game counter, opens the page. The address is also shown in Options, on the *Phone remote* row.
+
+- The address is `http://<cabinet's IP>:8642/`. The port stays the same (change it with `port` under `[remote]`). To keep the IP the same too, give the cabinet a fixed address (a DHCP reservation) in your router. Rusty Popper finds its own address, and you can set the one the QR code shows with `address`.
+- Run `Allow-RustyPopperRemote.ps1` once (right-click, *Run with PowerShell*) so Windows Firewall lets phones in. Otherwise Windows may ask the first time, and the question can be hidden behind the cabinet's screens.
+- Only devices on your local network get an answer. For a PIN as well, set `pin` (letters and digits) under `[remote]`; the QR code includes it.
+- If Options shows `localhost` as the address, Rusty Popper couldn't work out its address (a network with no internet route, say): set `address` under `[remote]`.
 
 ## Updating
 
@@ -105,6 +115,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 | `[audio]` | `volume` for the playfield video |
 | `[sound]` | Menu sound effects: `enabled`, `volume`, `dir`; game audio: `game_audio`, `game_audio_volume` |
 | `[dof]` | `enabled`: DOF for the menu, driving lights, flashers, shakers and other toys (default off) |
+| `[remote]` | The phone remote: `enabled` (default off), `port` (8642), and optional `pin` and `address` |
 | `[update]` | `check` for updates at startup, and the `repo` they come from |
 
 ## What it changes
@@ -159,6 +170,7 @@ The exe is a windowed program, so a terminal doesn't wait for it. Use `start /wa
 - **Sound:** menu effects mixed on their own thread into a `waveOut` stream; game audio through libmpv
 - **DOF:** COM late binding (`IDispatch`) via the `windows` crate
 - **Updates:** `ureq` (rustls) against the GitHub releases API, `sha2` to verify, `zip` to unpack
+- **Phone remote:** `tiny_http` on its own thread, one embedded page, `qrcodegen` for the QR code
 
 ```
 crates/
@@ -182,6 +194,7 @@ crates/
     dof.rs        optional DOF output
     errscreen.rs  the full-screen "couldn't start" notice
     updater.rs    update check, install and rollback
+    remote.rs     the optional phone remote (web page, QR code)
     win.rs, logging.rs  Win32 helpers, rusty-popper.log
   rp-db/      PUPDatabase.db access
   rp-config/  PinUpPlayer.ini and POPMedia path resolution
