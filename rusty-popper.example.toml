@@ -43,6 +43,7 @@ style = "arc"          # "arc", "flow", "minimal" or "vertical"; W cycles at run
 # interval_secs = 12   # time on each game in attract mode
 
 [audio]
+# enabled = true       # playfield video sound on or off (off keeps the volume)
 # volume = 100         # playfield video volume; default from PinUpPlayer.ini
 
 [sound]

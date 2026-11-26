@@ -71,7 +71,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 - Wheel style (arc, cover flow, minimal or vertical)
 - **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
-- **Sound ›**, a submenu with the video volume, sound effects on or off and their volume, and game audio on or off and its volume. Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
+- **Sound ›**, a submenu with video sound, sound effects and game audio, each on or off with its own volume (a volume only shows while its sound is on). Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
 - **Phone remote** on or off (off by default; see below)
 - Install update / check for updates

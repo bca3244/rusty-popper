@@ -2,6 +2,15 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.41] - 2026-11-26
+
+### Added
+- **Video sound on/off** in Options → Sound (and on the phone's Settings page), like sound effects and game audio. Off keeps the video volume for when it's turned back on (`[audio] enabled`).
+
+### Changed
+- A setting's sub-settings only show while it's on: attract mode's timings, and each sound's volume. Same on the cabinet and on the phone.
+- The phone remote no longer shows a game's number of players.
+
 ## [0.2.40] - 2026-11-26
 
 Fixes from the v0.2.38 code review.

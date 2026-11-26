@@ -378,6 +378,7 @@ fn run() -> Result<()> {
         view: Vec::new(),
         attract: settings.attract,
         volume,
+        video_sound: settings.audio.enabled,
         last_input: now,
         attract_on: false,
         next_attract: now,
@@ -629,8 +630,27 @@ const SOUND_ROW: usize = 2;
 const DOF_ROW: usize = 3;
 const REMOTE_ROW: usize = 4;
 const UPDATE_ROW: usize = 5;
-const ATTRACT_ROWS: usize = 4; // on/off, starts after, time per game, back
-const SOUND_ROWS: usize = 6; // video volume, effects, effects volume, game audio, game audio volume, back
+
+/// The rows of Options → Attract mode (see `App::attract_rows`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttractRow {
+    Toggle,
+    StartsAfter,
+    TimePerGame,
+    Back,
+}
+
+/// The rows of Options → Sound (see `App::sound_rows`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SoundRow {
+    Video,
+    VideoVolume,
+    Effects,
+    EffectsVolume,
+    GameAudio,
+    GameAudioVolume,
+    Back,
+}
 
 fn next_choice(choices: &[u64], cur: u64) -> u64 {
     let i = choices.iter().position(|&c| c > cur).unwrap_or(0);
@@ -732,8 +752,11 @@ struct App {
     /// Item indices in the current playlist, in wheel order.
     view: Vec<usize>,
     attract: settings::AttractSettings,
-    /// Playfield video volume (0-100), adjustable in Options.
+    /// Playfield video volume (0-100), adjustable in Options; kept while
+    /// `video_sound` is off.
     volume: i32,
+    /// Whether the playfield video plays its sound.
+    video_sound: bool,
     last_input: Instant,
     attract_on: bool,
     next_attract: Instant,

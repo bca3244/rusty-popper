@@ -34,6 +34,7 @@
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 14px 0 6px; font-weight: 600; }
   h2:first-child { margin-top: 0; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+  .row[hidden] { display: none; }
   .row label { flex: 1; white-space: nowrap; }
   .row output { min-width: 3.2em; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
   select { background: #222834; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; }
@@ -73,14 +74,15 @@
       </select></div>
     <h2>Attract mode</h2>
     <div class="row"><label for="attract">Attract mode</label><input type="checkbox" id="attract" data-key="attract"></div>
-    <div class="row"><label for="attract_idle">Starts after</label><select id="attract_idle" data-key="attract_idle"></select></div>
-    <div class="row"><label for="attract_interval">Time per game</label><select id="attract_interval" data-key="attract_interval"></select></div>
+    <div class="row" data-parent="attract"><label for="attract_idle">Starts after</label><select id="attract_idle" data-key="attract_idle"></select></div>
+    <div class="row" data-parent="attract"><label for="attract_interval">Time per game</label><select id="attract_interval" data-key="attract_interval"></select></div>
     <h2>Sound</h2>
-    <div class="row"><label for="volume">Video volume</label><input type="range" id="volume" data-key="volume" min="0" max="100" step="10"><output for="volume"></output></div>
+    <div class="row"><label for="video_sound">Video sound</label><input type="checkbox" id="video_sound" data-key="video_sound"></div>
+    <div class="row" data-parent="video_sound"><label for="volume">Video volume</label><input type="range" id="volume" data-key="volume" min="0" max="100" step="10"><output for="volume"></output></div>
     <div class="row"><label for="sfx">Sound effects</label><input type="checkbox" id="sfx" data-key="sfx"></div>
-    <div class="row"><label for="sfx_volume">Effects volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
+    <div class="row" data-parent="sfx"><label for="sfx_volume">Effects volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
     <div class="row"><label for="game_audio">Game audio</label><input type="checkbox" id="game_audio" data-key="game_audio"></div>
-    <div class="row"><label for="game_audio_volume">Game audio volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
+    <div class="row" data-parent="game_audio"><label for="game_audio_volume">Game audio volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
     <h2>Cabinet</h2>
     <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
     <h2>Updates</h2>
@@ -138,7 +140,6 @@ function show(s) {
   $("facts").replaceChildren();
   if (g) {
     fact("System", g.emulator);
-    fact("Players", g.players);
     fact("ROM", g.rom);
     fact("File", g.file);
     fact("Tags", g.tags && g.tags.length ? g.tags : null);
@@ -179,6 +180,7 @@ function showSettings(st) {
     const out = document.querySelector('output[for="' + k + '"]');
     if (out) out.textContent = st[k] + "%";
   }
+  showChildren();
   // After a check from this page, "Checking" stays up long enough to read;
   // the status line then says how it went.
   if (checkedAt && st.update_state !== "checking" && Date.now() - checkedAt > 1500) checkedAt = 0;
@@ -189,6 +191,11 @@ function showSettings(st) {
   u.textContent = st.update_action === "install" ? "Install" : "Check";
 }
 let haveSettings = false, checkedAt = 0;
+// A setting's sub-settings (its volume, attract mode's timings) only show
+// while it's switched on, as on the cabinet.
+function showChildren() {
+  for (const row of document.querySelectorAll("[data-parent]")) row.hidden = !$(row.dataset.parent).checked;
+}
 function updateText(st) {
   if (st.update_state === "checking" || checkedAt) return "Checking for updates…";
   if (st.update_state === "none") return "No new updates (v" + $("ver").textContent.slice(1) + ")";
@@ -275,7 +282,7 @@ for (const el of document.querySelectorAll("[data-key]")) {
     el.addEventListener("input", () => { touched[k] = Date.now(); document.querySelector('output[for="' + k + '"]').textContent = el.value + "%"; });
     el.addEventListener("change", () => setting(k, el.value));
   } else if (el.type === "checkbox") {
-    el.addEventListener("change", () => setting(k, el.checked ? "on" : "off"));
+    el.addEventListener("change", () => { showChildren(); setting(k, el.checked ? "on" : "off"); });
   } else {
     el.addEventListener("change", () => setting(k, el.value));
   }

@@ -340,10 +340,19 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct AudioSettings {
+    /// The playfield video's sound. Off keeps `volume` for when it's back on.
+    #[serde(default = "yes")]
+    pub enabled: bool,
     /// Playfield video volume, 0-100. Default: PinUpPlayer.ini's playfield volume.
     pub volume: Option<i32>,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        AudioSettings { enabled: true, volume: None }
+    }
 }
 
 /// Values the in-menu Options screen can change.
@@ -352,6 +361,7 @@ pub struct Editable {
     pub attract_enabled: bool,
     pub attract_idle_secs: u64,
     pub attract_interval_secs: u64,
+    pub video_sound: bool,
     pub volume: i32,
     pub sound_enabled: bool,
     pub sound_volume: i32,
@@ -378,6 +388,7 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("attract", "enabled", v.attract_enabled.into());
     set("attract", "idle_secs", (v.attract_idle_secs as i64).into());
     set("attract", "interval_secs", (v.attract_interval_secs as i64).into());
+    set("audio", "enabled", v.video_sound.into());
     set("audio", "volume", (v.volume as i64).into());
     set("sound", "enabled", v.sound_enabled.into());
     set("sound", "volume", (v.sound_volume as i64).into());
@@ -438,6 +449,7 @@ mod tests {
         assert_eq!(s.input.menu_joy_buttons, [3]);
         assert!(s.input.joystick_needs_focus && s.input.keyboard_quit);
         assert!(s.attract.enabled);
+        assert!(s.audio.enabled, "video sound is on by default");
         assert!(!s.dof.enabled, "DOF is off by default");
         assert!(!s.remote.enabled && s.remote.pin.is_none(), "the phone remote is off, with no PIN, by default");
         assert_eq!(s.remote.port, crate::remote::DEFAULT_PORT);
@@ -464,7 +476,7 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
+        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
@@ -474,12 +486,14 @@ mod tests {
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
         assert!(s.dof.enabled);
         assert!(s.remote.enabled);
+        assert!(!s.audio.enabled);
     }
 
     #[test]
     fn save_keeps_inline_tables() {
         let before = "remote = { enabled = false, pin = '1234', port = 9000 }\nsound = { volume = 10 }\n";
         let v = Editable {
+            video_sound: true,
             style: WheelStyle::Arc,
             attract_enabled: true,
             attract_idle_secs: 180,
@@ -503,7 +517,7 @@ mod tests {
         let mut style = WheelStyle::Arc;
         for _ in 0..4 {
             assert_eq!(WheelStyle::parse(style.key()), Some(style));
-            let v = Editable { style, attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
+            let v = Editable { style, attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
             let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap()).unwrap();
             assert_eq!(s.wheel.style, style);
             style = style.toggled();
