@@ -49,7 +49,7 @@ use library::{Item, Kind, Library};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use rp_config::{self as config, Screen, Slot};
 use rp_db as db;
-use settings::{Settings, WheelStyle};
+use settings::{Layout, Settings, WheelPosition, WheelStyle};
 use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -251,6 +251,8 @@ fn run() -> Result<()> {
     }
     let settings = Settings::load(&exe_dir().join("rusty-popper.toml"));
     let style = args.wheel.unwrap_or(settings.wheel.style);
+    // --wheel picks a template, with its own layout (the saved one if it's the saved template).
+    let layout = if style == settings.wheel.style { settings.wheel.layout() } else { style.template() };
     let found = discover::find_popper(args.popper.clone(), settings.paths.popper_dir.clone())?;
     let popper = found.dir;
 
@@ -366,6 +368,7 @@ fn run() -> Result<()> {
         joy_needs_focus: inp.joystick_needs_focus,
         ignore_processes: settings.launch.ignore_processes.clone(),
         style,
+        layout,
         start,
         ui_rotation_override: settings.playfield.ui_rotation,
         deadline: args.seconds.map(|s| now + Duration::from_secs(s)),
@@ -627,10 +630,10 @@ const EXIT_MENU: &[&str] = &["Back to Games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 7; // style, attract (submenu), sound (submenu), DOF, phone remote, update, back
+const OPTION_ROWS: usize = 7; // layout, attract, sound (submenus), DOF, phone remote, update, back
 /// The Options rows, in the order `option_labels` lists them (Back is last).
-const STYLE_ROW: usize = 0;
-/// The rows that open the Attract mode and Sound submenus.
+/// The rows that open the Layout, Attract mode and Sound submenus.
+const LAYOUT_ROW: usize = 0;
 const ATTRACT_ROW: usize = 1;
 const SOUND_ROW: usize = 2;
 const DOF_ROW: usize = 3;
@@ -645,6 +648,19 @@ enum AttractRow {
     TimePerGame,
     Back,
 }
+
+/// The rows of Options → Layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayoutRow {
+    Template,
+    Size,
+    Position,
+    SideWheels,
+    Arc,
+    Reset,
+    Back,
+}
+const LAYOUT_ROWS: &[LayoutRow] = &[LayoutRow::Template, LayoutRow::Size, LayoutRow::Position, LayoutRow::SideWheels, LayoutRow::Arc, LayoutRow::Reset, LayoutRow::Back];
 
 /// The rows of Options → Sound (see `App::sound_rows`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -698,6 +714,8 @@ enum MenuKind {
     Attract,
     /// Options → Sound: every volume and sound setting.
     Sound,
+    /// Options → Layout: the wheel's template, size, position, side wheels and arc.
+    Layout,
 }
 
 struct ExitMenu {
@@ -740,7 +758,9 @@ struct App {
     keyboard_quit: bool,
     joy_needs_focus: bool,
     ignore_processes: Vec<String>,
+    /// The layout template, and the layout as changed from it.
     style: WheelStyle,
+    layout: Layout,
     start: usize,
     /// `[playfield] ui_rotation`, overriding Popper's ThumbRotate.
     ui_rotation_override: Option<i32>,

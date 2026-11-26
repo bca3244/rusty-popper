@@ -3,16 +3,13 @@
 //! design space (matching the Wheel Style Lab mockup) and scaled to the screen.
 
 use crate::assets::{GLOW_INNER, GLOW_SIZE};
-use crate::settings::WheelStyle;
+use crate::settings::{Layout, WheelPosition, WheelStyle};
 use femtovg::{renderer::OpenGl, Align, Baseline, Canvas, Color, FontId, ImageId, Paint, Path};
 use std::f32::consts::PI;
 
 pub const DESIGN_H: f32 = 1080.0;
 pub const DESIGN_W: f32 = 1920.0;
-/// Cover flow geometry (design units / radians): distance of the first side
-/// cover, step between the next ones, and how far side covers are turned.
-const FLOW_FIRST: f32 = 390.0;
-const FLOW_STEP: f32 = 270.0;
+/// How far cover flow's side covers are turned (radians).
 const FLOW_TURN: f32 = 0.85;
 /// Delay after the selection settles before media on the screens is swapped.
 pub const MEDIA_DEBOUNCE: f32 = 0.16;
@@ -112,7 +109,9 @@ impl Wheel {
 
 /// Everything the wheel needs to draw one frame.
 pub struct Frame<'a> {
+    /// The layout template (Cover flow draws turned covers, Minimal stays plain).
     pub style: WheelStyle,
+    pub layout: Layout,
     pub wheel: &'a Wheel,
     /// Every game's entry; `order` picks and orders the ones in the current playlist.
     pub entries: &'a [Entry],
@@ -146,37 +145,22 @@ type Cv = Canvas<OpenGl>;
 pub fn draw(cv: &mut Cv, w: f32, h: f32, f: &Frame) {
     // The design is 1080 units on the short side, so a portrait playfield gets
     // the same element sizes as a landscape one (1080 wide, extra height above
-    // the wheel); horizontal spacing is compressed in draw_flow.
+    // the wheel); a row of wheels that would not fit is squeezed (see Track).
     let s = (h / DESIGN_H).min(w / DESIGN_H);
     let (vw, dh) = (w / s, h / s);
     cv.save();
     cv.scale(s, s);
 
-    // Darken the top for the info text and the bottom behind the wheel.
+    // Darken the top for the info text, and behind the row of wheels.
     let mut p = Path::new();
     p.rect(0.0, 0.0, vw, 450.0);
     cv.fill_path(&p, &Paint::linear_gradient(0.0, 0.0, 0.0, 450.0, Color::rgbaf(0.012, 0.016, 0.03, 0.7), Color::rgbaf(0.012, 0.016, 0.03, 0.0)));
-    let mut p = Path::new();
-    if f.style == WheelStyle::Vertical {
-        // Vertical shades the right side behind its logo column instead.
-        let gw = vertical_col_w(vw) + 260.0;
-        p.rect(vw - gw, 0.0, gw, dh);
-        cv.fill_path(&p, &Paint::linear_gradient(vw - gw, 0.0, vw, 0.0, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, 0.6)));
-    } else {
-        // Minimal keeps more of the video clear: a shorter, lighter shade.
-        let (bh, ba) = if f.style == WheelStyle::Minimal { (320.0, 0.45) } else { (430.0, 0.6) };
-        p.rect(0.0, dh - bh, vw, bh);
-        cv.fill_path(&p, &Paint::linear_gradient(0.0, dh - bh, 0.0, dh, Color::rgbaf(0.016, 0.024, 0.04, 0.0), Color::rgbaf(0.016, 0.024, 0.04, ba)));
-    }
+    let track = Track::new(vw, dh, f.layout, f.style);
+    draw_shade(cv, vw, dh, &track);
 
     if !f.order.is_empty() {
-        match f.style {
-            WheelStyle::Arc => draw_arc(cv, vw, dh, f),
-            WheelStyle::Flow => draw_flow(cv, vw, dh, f),
-            WheelStyle::Minimal => draw_minimal(cv, vw, dh, f),
-            WheelStyle::Vertical => draw_vertical(cv, vw, dh, f),
-        }
-        draw_info(cv, vw, f);
+        draw_track(cv, &track, f);
+        draw_info(cv, vw, f, &track);
     } else {
         let paint = Paint::color(Color::rgbaf(0.9, 0.92, 0.96, 0.8))
             .with_font(&[f.fonts.display])
@@ -296,193 +280,304 @@ fn visible_items(pos: f32, n: usize, range: f32) -> Vec<(usize, f32)> {
     items
 }
 
-fn draw_arc(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
-    // A narrow (portrait) screen packs the arc tighter and the logos smaller
-    // so two neighbors fit on each side of the selection.
-    let narrow = vw < DESIGN_W * 0.75;
-    let (step, base_w, base_h) = if narrow { (0.145f32, 180.0f32, 150.0f32) } else { (0.205, 240.0, 190.0) };
-    let (r, cx, sy) = (1500.0f32, vw / 2.0, dh - 240.0);
-    let cy = sy + r;
-    let sel = f.entry(f.wheel.selected());
+/// The main wheel's box at 100% size (design units); a logo is fitted into it.
+const BOX_W: f32 = 400.0;
+const BOX_H: f32 = 250.0;
+/// How big the side wheels are next to the main one (flat logos).
+const SIDE_SCALE: f32 = 0.6;
+/// Radius of the big wheel the row curves round when Arc is on.
+const ARC_R: f32 = 1500.0;
+/// Cover flow's perspective distance.
+const FOCAL: f32 = 1600.0;
 
-    for (rad, a0, alpha, lw) in [(r, 0.95f32, 0.10f32, 3.0f32), (r + 190.0, 0.8, 0.05, 2.0)] {
-        let mut p = Path::new();
-        p.arc(cx, cy, rad, -PI / 2.0 - a0, -PI / 2.0 + a0, femtovg::Solidity::Hole);
-        cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, alpha)).with_line_width(lw));
+/// Where the row of wheels sits on this screen, worked out from the layout
+/// once a frame. The row runs along the bottom, or down the left or right
+/// side; "along" is the row's direction and "inward" is towards the screen
+/// edge it hugs (where Arc bends the far wheels).
+struct Track {
+    pos: WheelPosition,
+    /// Cover flow's turned covers rather than flat logos.
+    covers: bool,
+    /// Minimal: no glow and a lighter shade, so more video shows.
+    plain: bool,
+    arc: bool,
+    /// The main wheel's box.
+    bw: f32,
+    bh: f32,
+    /// The main wheel's centre.
+    cx: f32,
+    cy: f32,
+    /// Distance along the row to the first side wheel, then between the rest.
+    first: f32,
+    next: f32,
+    /// Wheels shown each side.
+    side: f32,
+    /// Half the row's length (from the main wheel to either end).
+    half: f32,
+    vw: f32,
+}
+
+impl Track {
+    fn new(vw: f32, dh: f32, layout: Layout, style: WheelStyle) -> Track {
+        let covers = style == WheelStyle::Flow;
+        let k = layout.size as f32 / 100.0;
+        let (bw, bh) = (BOX_W * k, BOX_H * k);
+        let side_row = layout.position != WheelPosition::Bottom;
+        // A side row runs from below the title block (portrait) or the
+        // counter (landscape) down to near the bottom.
+        let (lo, hi) = if side_row { (vertical_col_top(vw), dh - 50.0) } else { (0.0, vw) };
+        let half = (hi - lo) / 2.0;
+        // The wheels' size along the row.
+        let e = if side_row { bh } else { bw };
+        let (mut first, mut next) = if covers {
+            // Covers overlap like a shelf of records.
+            (0.75 * e, 0.52 * e)
+        } else {
+            let gap = 0.12 * e;
+            (0.5 * e * (1.0 + SIDE_SCALE) + gap, e * SIDE_SCALE + gap)
+        };
+        let mut side = layout.side_wheels as f32;
+        // When that many wheels won't fit, show fewer (flat logos would pile
+        // up), then squeeze the spacing a little: the last one's centre stays
+        // on screen (a side row keeps all of it in).
+        if side >= 1.0 {
+            let room = half - e * SIDE_SCALE * if side_row { 0.5 } else { 0.3 };
+            let mut last = first + (side - 1.0) * next;
+            while !covers && side > 1.0 && room < 0.8 * last {
+                side -= 1.0;
+                last -= next;
+            }
+            if last > room {
+                let f = (room / last).max(0.15);
+                first *= f;
+                next *= f;
+            }
+        }
+        let last = if side >= 1.0 { first + (side - 1.0) * next } else { 0.0 };
+        // How far Arc bends the last wheel towards the edge.
+        let bulge = if layout.arc { ARC_R * (1.0 - (last / ARC_R).min(PI / 2.0).cos()) } else { 0.0 };
+        // A side row hugs its edge: a round logo sits 40 units from it.
+        let inset = 40.0 + bw.min(bh) / 2.0 + bulge;
+        let (cx, cy) = match layout.position {
+            WheelPosition::Bottom => {
+                // Arc's side wheels drop lower; covers need room for their reflection.
+                let lift = if layout.arc { 60.0 } else { 0.0 } + if covers { 0.35 * bh } else { 0.0 };
+                // ...but never so low that the last one drops off the screen.
+                (vw / 2.0, (dh - 50.0 - bh / 2.0 - lift).min(dh - 30.0 - bulge))
+            }
+            WheelPosition::Right => (vw - inset, (lo + hi) / 2.0),
+            WheelPosition::Left => (inset, (lo + hi) / 2.0),
+        };
+        Track { pos: layout.position, covers, plain: style == WheelStyle::Minimal, arc: layout.arc, bw, bh, cx, cy, first, next, side, half, vw }
     }
-    let pos = f.wheel.pos;
-    let near = 1.0 - clamp((pos - pos.round()).abs() * 2.0, 0.0, 1.0);
-    slot_glow(cv, cx, sy, 360.0, 200.0, entry_hue(sel), 0.6 + 0.4 * near);
 
-    for (i, d) in visible_items(pos, f.order.len(), 4.6) {
-        let e = f.entry(i);
-        let ang = d * step;
-        let ad = d.abs();
-        let (x, y) = (cx + r * ang.sin(), cy - r * ang.cos());
-        let sc = 1.0 + 0.62 * (1.0 - ad).max(0.0);
-        let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
-        let (w, h) = fit(aspect, base_w * sc, base_h * sc);
-        let alpha = clamp(1.25 - ad * 0.22, 0.0, 1.0) * if ad < 0.5 { 1.0 } else { 0.82 };
-        cv.save();
-        cv.translate(x, y);
-        cv.rotate(ang * 0.85);
-        draw_logo(cv, e, w, h, alpha, (1.0 - ad * 1.6).max(0.0), f.fonts);
-        cv.restore();
+    fn side_row(&self) -> bool {
+        self.pos != WheelPosition::Bottom
+    }
+
+    /// Centre and turn of the wheel `d` places from the selection.
+    fn place(&self, d: f32) -> (f32, f32, f32) {
+        let a = d.abs();
+        let s = d.signum() * (a.min(1.0) * self.first + (a - 1.0).max(0.0) * self.next);
+        let (along, inward, th) = if self.arc {
+            let th = (s / ARC_R).clamp(-PI / 2.0, PI / 2.0);
+            (ARC_R * th.sin(), ARC_R * (1.0 - th.cos()), th)
+        } else {
+            (s, 0.0, 0.0)
+        };
+        // Arc tilts each wheel as if it sat on the big wheel's rim.
+        match self.pos {
+            WheelPosition::Bottom => (self.cx + along, self.cy + inward, th * 0.85),
+            WheelPosition::Right => (self.cx + inward, self.cy + along, -th * 0.85),
+            WheelPosition::Left => (self.cx - inward, self.cy + along, th * 0.85),
+        }
+    }
+
+    /// The widest a wheel centred at `x` may be, so a side row's wheels stay
+    /// 30 units clear of the screen edge.
+    fn max_w(&self, x: f32) -> f32 {
+        match self.pos {
+            WheelPosition::Bottom => f32::INFINITY,
+            WheelPosition::Right => 2.0 * (self.vw - 30.0 - x),
+            WheelPosition::Left => 2.0 * (x - 30.0),
+        }
+        .max(1.0)
+    }
+
+    /// A logo's drawn size `a` places out (0 = the main wheel), fitted and capped.
+    fn logo_size(&self, aspect: f32, a: f32, x: f32) -> (f32, f32) {
+        let sc = if self.covers { 1.0 } else { SIDE_SCALE + (1.0 - SIDE_SCALE) * (1.0 - a).max(0.0) };
+        let (w, h) = fit(aspect, self.bw * sc, self.bh * sc);
+        let cap = self.max_w(x);
+        if w > cap { (cap, h * cap / w) } else { (w, h) }
+    }
+
+    /// How far from its screen edge a side row reaches (the main wheel and
+    /// the selection bar beside it), so the title can keep clear of it.
+    fn reach(&self) -> f32 {
+        let w = self.bw.min(self.max_w(self.cx));
+        let edge_dist = if self.pos == WheelPosition::Right { self.vw - self.cx } else { self.cx };
+        edge_dist + w / 2.0 + 40.0
     }
 }
 
-fn draw_flow(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
-    let (cx, y0, focal) = (vw / 2.0, dh - 320.0, 1600.0f32);
-    const STRIPS: usize = 22;
-    let sel = f.entry(f.wheel.selected());
-    fill_rect(cv, 0.0, y0 + 182.0, vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
-    slot_glow(cv, cx, y0, 420.0, 230.0, entry_hue(sel), 0.9);
+/// The darkening behind the row of wheels.
+fn draw_shade(cv: &mut Cv, vw: f32, dh: f32, t: &Track) {
+    let c = |a: f32| Color::rgbaf(0.016, 0.024, 0.04, a);
+    let a = if t.plain { 0.45 } else { 0.6 };
+    let mut p = Path::new();
+    match t.pos {
+        WheelPosition::Bottom => {
+            let h = (dh - t.cy + t.bh * 0.6).min(dh);
+            p.rect(0.0, dh - h, vw, h);
+            cv.fill_path(&p, &Paint::linear_gradient(0.0, dh - h, 0.0, dh, c(0.0), c(a)));
+        }
+        WheelPosition::Right => {
+            let gw = (t.reach() + 260.0).min(vw);
+            p.rect(vw - gw, 0.0, gw, dh);
+            cv.fill_path(&p, &Paint::linear_gradient(vw - gw, 0.0, vw, 0.0, c(0.0), c(a)));
+        }
+        WheelPosition::Left => {
+            let gw = (t.reach() + 260.0).min(vw);
+            p.rect(0.0, 0.0, gw, dh);
+            cv.fill_path(&p, &Paint::linear_gradient(gw, 0.0, 0.0, 0.0, c(0.0), c(a)));
+        }
+    }
+}
 
-    // Portrait shows two covers each side, landscape four.
-    // The outermost cover fades in/out as the shelf moves instead of popping.
-    let shown = if vw < DESIGN_W * 0.75 { 2.0 } else { 4.0 };
-    for (i, d) in visible_items(f.wheel.pos, f.order.len(), shown + 1.0) {
+/// The row of wheels: the selection big in its slot, `side` smaller ones
+/// (or turned covers) each side. The outermost fades in and out as the row
+/// moves instead of popping.
+fn draw_track(cv: &mut Cv, t: &Track, f: &Frame) {
+    let pos = f.wheel.pos;
+    let sel = f.entry(f.wheel.selected());
+    let hue = entry_hue(sel);
+    let near = 1.0 - clamp((pos - pos.round()).abs() * 2.0, 0.0, 1.0);
+
+    // Arc: faint rims of the big wheel.
+    if t.arc && !t.covers {
+        let reach = if t.side_row() { ((t.half + 80.0) / ARC_R).min(1.0).asin().min(0.95) } else { 0.95 };
+        for (extra, a0, alpha, lw) in [(0.0f32, reach, 0.10f32, 3.0f32), (190.0, reach * 0.85, 0.05, 2.0)] {
+            let (ccx, ccy, mid) = match t.pos {
+                WheelPosition::Bottom => (t.cx, t.cy + ARC_R, -PI / 2.0),
+                WheelPosition::Right => (t.cx + ARC_R, t.cy, PI),
+                WheelPosition::Left => (t.cx - ARC_R, t.cy, 0.0),
+            };
+            let mut p = Path::new();
+            p.arc(ccx, ccy, ARC_R + extra, mid - a0, mid + a0, femtovg::Solidity::Hole);
+            cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, alpha)).with_line_width(lw));
+        }
+    }
+    // Cover flow along the bottom: a faint floor line under the covers.
+    if t.covers && t.pos == WheelPosition::Bottom && !t.arc {
+        fill_rect(cv, 0.0, t.cy + t.bh * 0.55, t.vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
+    }
+    let sel_aspect = sel.logo.as_ref().map_or(1.6, |l| l.aspect);
+    let (sel_w, sel_h) = t.logo_size(sel_aspect, 0.0, t.cx);
+    if !t.plain {
+        slot_glow(cv, t.cx, t.cy, sel_w.max(t.bh) * 0.85, t.bh * 0.75, hue, 0.6 + 0.4 * near);
+    }
+    // A side row marks the selection with a thin accent bar on its inner side.
+    if t.side_row() {
+        let bx = if t.pos == WheelPosition::Right { t.cx - sel_w / 2.0 - 30.0 } else { t.cx + sel_w / 2.0 + 24.0 };
+        let mut p = Path::new();
+        p.rounded_rect(bx, t.cy - sel_h * 0.4, 6.0, sel_h * 0.8, 3.0);
+        cv.fill_path(&p, &Paint::color(hue_color(hue, 0.9, 0.65, 0.5 + 0.4 * near)));
+    }
+
+    // Covers along the bottom show their reflection on the floor.
+    let reflect = t.covers && t.pos == WheelPosition::Bottom;
+    for (i, d) in visible_items(pos, f.order.len(), t.side + 1.0) {
         let e = f.entry(i);
         let a = d.abs();
-        let sgn = d.signum();
-        let a1 = a.min(1.0);
-        let squeeze = (vw / DESIGN_W).clamp(0.6, 1.0);
-        // Even spacing: the first cover sits a bit further out than the step between
-        // the rest (it clears the big centre cover), the others follow evenly.
-        let off = (a1 * FLOW_FIRST + (a - 1.0).max(0.0) * FLOW_STEP) * sgn * squeeze;
-        let theta = -sgn * a1 * FLOW_TURN;
-        let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
-        let (w, hgt) = fit(aspect, 520.0, 330.0);
-        let alpha = clamp(1.3 - a * 0.2, 0.0, 1.0) * clamp(shown + 1.0 - a, 0.0, 1.0);
-        if alpha <= 0.0 {
+        let fade = clamp(t.side + 1.0 - a, 0.0, 1.0);
+        if fade <= 0.0 {
             continue;
         }
-
-        let Some(logo) = (if a < 0.04 { None } else { e.logo.as_ref() }) else {
-            // Centered (or not yet loaded): flat logo plus reflection.
-            cv.save();
-            cv.translate(cx + off, y0);
-            draw_logo(cv, e, w, hgt, alpha, if a < 0.04 { 1.0 } else { 0.0 }, f.fonts);
-            cv.restore();
-            if let Some(l) = &e.logo {
-                reflection(cv, l.img, cx + off - w / 2.0, y0 + hgt / 2.0 + 4.0, w, hgt, 0.16 * alpha, None);
-            }
-            continue;
-        };
-
-        let dim = 1.0 - 0.4 * a1 - 0.06 * (a - 1.0).max(0.0);
-        let strip_alpha = alpha * dim;
-        // Covers further out are smaller and dimmer: fewer strips do.
-        let strips = if a > 1.5 { STRIPS / 2 } else { STRIPS };
-        // A reflection this faint can't be seen.
-        let reflect = strip_alpha >= 0.05;
-        for k in 0..strips {
-            let u0 = k as f32 / strips as f32 - 0.5;
-            let u1 = (k + 1) as f32 / strips as f32 - 0.5;
-            let p0 = focal / (focal + u0 * w * theta.sin());
-            let p1 = focal / (focal + u1 * w * theta.sin());
-            let x0 = cx + off + u0 * w * theta.cos() * p0;
-            let x1 = cx + off + u1 * w * theta.cos() * p1;
-            let hh = hgt * ((p0 + p1) / 2.0) * (1.0 - 0.08 * a1);
-            let (dx, dw) = (x0.min(x1), (x1 - x0).abs());
-            if dw < 0.05 {
-                continue;
-            }
-            // Place the whole image so that slice k lands exactly on [dx, dx+dw].
-            // (|theta| <= 1.2 rad, so x1 > x0 and slices stay in order.)
-            let img_w = dw * strips as f32;
-            let img_x = dx - k as f32 * dw;
-            let mut paint = Paint::image(logo.img, img_x, y0 - hh / 2.0, img_w, hh, 0.0, strip_alpha);
-            paint.set_anti_alias(false);
-            let mut p = Path::new();
-            p.rect(dx, y0 - hh / 2.0, dw, hh);
-            cv.fill_path(&p, &paint);
-            if reflect {
-                reflection(cv, logo.img, img_x, y0 + hh / 2.0 + 4.0, img_w, hh, 0.13 * strip_alpha, Some((dx, dw)));
-            }
-        }
-    }
-}
-
-/// One big logo near the bottom, with its neighbours peeking in, half cut
-/// off, at the screen edges. Media swaps work as in the arc wheel.
-fn draw_minimal(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
-    let (cx, y) = (vw / 2.0, dh - 190.0);
-    // A neighbour's centre sits just inside the screen edge.
-    let spacing = vw / 2.0 - 70.0;
-    for (i, d) in visible_items(f.wheel.pos, f.order.len(), 1.6) {
-        let e = f.entry(i);
-        let a = d.abs().min(1.0);
-        let sc = 1.0 - 0.45 * a;
+        let (x, y, rot) = t.place(d);
         let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
-        let (w, h) = fit(aspect, 460.0 * sc, 260.0 * sc);
-        let alpha = (1.0 - 0.7 * a) * clamp(1.6 - d.abs(), 0.0, 1.0);
+        let (w, h) = t.logo_size(aspect, a, x);
         cv.save();
-        cv.translate(cx + d * spacing, y);
-        draw_logo(cv, e, w, h, alpha, (1.0 - a * 2.0).max(0.0), f.fonts);
+        cv.translate(x, y);
+        cv.rotate(rot);
+        if t.covers {
+            let alpha = clamp(1.3 - a * 0.2, 0.0, 1.0) * fade;
+            draw_cover(cv, e, w, h, d, alpha, t.side_row(), reflect, f.fonts);
+        } else {
+            // Side wheels are dimmer, Minimal's more so (it keeps the video clear).
+            let dimmer = if t.plain { 0.3 } else { 0.8 };
+            let alpha = clamp(1.2 - a * 0.2, 0.0, 1.0) * (1.0 - (1.0 - dimmer) * a.min(1.0)) * fade;
+            draw_logo(cv, e, w, h, alpha, (1.0 - a * 1.6).max(0.0), f.fonts);
+        }
         cv.restore();
     }
 }
 
-/// Width of the vertical list's logo column (narrower on a portrait screen).
-fn vertical_col_w(vw: f32) -> f32 {
-    if vertical_portrait(vw) { 480.0 } else { 608.0 }
+/// One cover-flow cover centred at the origin, turned towards the
+/// selection `d` places away. A side row turns covers about the other axis.
+#[allow(clippy::too_many_arguments)]
+fn draw_cover(cv: &mut Cv, e: &Entry, w: f32, hgt: f32, d: f32, alpha: f32, side_row: bool, reflect: bool, fonts: &Fonts) {
+    const STRIPS: usize = 22;
+    let a = d.abs();
+    let a1 = a.min(1.0);
+    let Some(logo) = (if a < 0.04 { None } else { e.logo.as_ref() }) else {
+        // Centred (or not yet loaded): flat logo plus reflection.
+        draw_logo(cv, e, w, hgt, alpha, if a < 0.04 { 1.0 } else { 0.0 }, fonts);
+        if let (true, Some(l)) = (reflect, &e.logo) {
+            reflection(cv, l.img, -w / 2.0, hgt / 2.0 + 4.0, w, hgt, 0.16 * alpha, None);
+        }
+        return;
+    };
+    let theta = -d.signum() * a1 * FLOW_TURN;
+    let dim = 1.0 - 0.4 * a1 - 0.06 * (a - 1.0).max(0.0);
+    let strip_alpha = alpha * dim;
+    // Covers further out are smaller and dimmer: fewer strips do.
+    let strips = if a > 1.5 { STRIPS / 2 } else { STRIPS };
+    // A reflection this faint can't be seen.
+    let reflect = reflect && strip_alpha >= 0.05;
+    // The cover is sliced across the row; each slice is scaled for its depth.
+    let (len, across) = if side_row { (hgt, w) } else { (w, hgt) };
+    for k in 0..strips {
+        let u0 = k as f32 / strips as f32 - 0.5;
+        let u1 = (k + 1) as f32 / strips as f32 - 0.5;
+        let p0 = FOCAL / (FOCAL + u0 * len * theta.sin());
+        let p1 = FOCAL / (FOCAL + u1 * len * theta.sin());
+        let t0 = u0 * len * theta.cos() * p0;
+        let t1 = u1 * len * theta.cos() * p1;
+        let cross = across * ((p0 + p1) / 2.0) * (1.0 - 0.08 * a1);
+        let (dt, dl) = (t0.min(t1), (t1 - t0).abs());
+        if dl < 0.05 {
+            continue;
+        }
+        // Place the whole image so that slice k lands exactly on [dt, dt+dl].
+        // (|theta| <= 1.2 rad, so t1 > t0 and slices stay in order.)
+        let img_len = dl * strips as f32;
+        let img_t = dt - k as f32 * dl;
+        let mut p = Path::new();
+        let mut paint = if side_row {
+            p.rect(-cross / 2.0, dt, cross, dl);
+            Paint::image(logo.img, -cross / 2.0, img_t, cross, img_len, 0.0, strip_alpha)
+        } else {
+            p.rect(dt, -cross / 2.0, dl, cross);
+            Paint::image(logo.img, img_t, -cross / 2.0, img_len, cross, 0.0, strip_alpha)
+        };
+        paint.set_anti_alias(false);
+        cv.fill_path(&p, &paint);
+        if reflect {
+            reflection(cv, logo.img, img_t, cross / 2.0 + 4.0, img_len, cross, 0.13 * strip_alpha, Some((dt, dl)));
+        }
+    }
 }
 
 fn vertical_portrait(vw: f32) -> bool {
     vw < DESIGN_W * 0.75
 }
 
-/// Where the vertical list's column starts: below the title block on a
-/// portrait screen (so the title keeps the full width), else below the
-/// playlist name and counter in the top-right corner.
+/// Where a side row starts: below the title block on a portrait screen
+/// (so the title keeps the full width), else below the playlist name and
+/// counter in the top corner.
 fn vertical_col_top(vw: f32) -> f32 {
     if vertical_portrait(vw) { 540.0 } else { 190.0 }
-}
-
-/// Vertical: a list of wheel logos down the right side. Next moves
-/// the list up, so the next game comes in from below.
-fn draw_vertical(cv: &mut Cv, vw: f32, dh: f32, f: &Frame) {
-    let col_w = vertical_col_w(vw);
-    let sel_h = col_w * 0.48;
-    // Hug the right edge: a round logo sits 40 units from it, and a wide one
-    // is capped so it still stays 30 units clear of the edge.
-    let cx = vw - 40.0 - sel_h / 2.0;
-    let sel_w = col_w.min(2.0 * (vw - 30.0 - cx));
-    let (top, bottom) = (vertical_col_top(vw), dh - 50.0);
-    let cy = (top + bottom) / 2.0;
-    let step = col_w * 0.42;
-    let sel = f.entry(f.wheel.selected());
-
-    // Selection marker: a soft glow and a thin accent bar just left of the logo.
-    let pos = f.wheel.pos;
-    let near = 1.0 - clamp((pos - pos.round()).abs() * 2.0, 0.0, 1.0);
-    let hue = entry_hue(sel);
-    slot_glow(cv, cx, cy, sel_w * 0.75, sel_h * 0.85, hue, 0.5 + 0.5 * near);
-    let (logo_w, _) = fit(sel.logo.as_ref().map_or(1.6, |l| l.aspect), sel_w, sel_h);
-    let mut p = Path::new();
-    p.rounded_rect(cx - logo_w / 2.0 - 30.0, cy - sel_h * 0.4, 6.0, sel_h * 0.8, 3.0);
-    cv.fill_path(&p, &Paint::color(hue_color(hue, 0.9, 0.65, 0.5 + 0.4 * near)));
-
-    let range = ((bottom - top) / 2.0 / step).ceil() + 1.0;
-    for (i, d) in visible_items(pos, f.order.len(), range) {
-        let y = cy + d * step;
-        let ad = d.abs();
-        let sc = 0.58 + 0.42 * (1.0 - ad).max(0.0);
-        // Fade out towards the ends of the column instead of popping.
-        let edge = ((y - top + step * 0.5) / step).min((bottom + step * 0.5 - y) / step);
-        let alpha = clamp(1.1 - ad * 0.2, 0.0, 1.0) * clamp(edge, 0.0, 1.0) * if ad < 0.5 { 1.0 } else { 0.75 };
-        if alpha <= 0.0 {
-            continue;
-        }
-        let e = f.entry(i);
-        let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
-        let (w, h) = fit(aspect, sel_w * sc, sel_h * sc);
-        cv.save();
-        cv.translate(cx, y);
-        draw_logo(cv, e, w, h, alpha, (1.0 - ad * 1.6).max(0.0), f.fonts);
-        cv.restore();
-    }
 }
 
 /// Mirrored bottom half of an image under a logo whose bottom edge is at `top`.
@@ -536,14 +631,21 @@ fn split_middle(t: &str) -> (String, String) {
         None => (t.to_string(), String::new()),
     }
 }
-fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
+fn draw_info(cv: &mut Cv, vw: f32, f: &Frame, track: &Track) {
     let idx = f.wheel.selected();
     let e = f.entry(idx);
     let hue = entry_hue(e);
     let a = ease_out(f.wheel.info_t / INFO_FADE);
     // Slide in from the side the wheel is moving from: from the right on Next, the left on Prior.
     let off = (1.0 - a) * 28.0 * f.wheel.last_dir as f32;
-    let (x, y) = (96.0f32, 120.0f32);
+    let y = 120.0f32;
+    // On a landscape screen a side row runs alongside the title: keep clear of it.
+    let beside = if track.side_row() && !vertical_portrait(vw) { track.reach() + 40.0 } else { 0.0 };
+    let (x, max_w) = match track.pos {
+        WheelPosition::Left if beside > 0.0 => (beside.max(96.0), vw - 96.0 - beside.max(96.0)),
+        _ => (96.0, vw - 96.0 - beside.max(96.0)),
+    };
+    let max_w = max_w.max(200.0);
 
     let text = |font: FontId, size: f32, c: Color, align: Align| {
         Paint::color(c).with_font(&[font]).with_font_size(size).with_text_align(align).with_text_baseline(Baseline::Alphabetic)
@@ -554,9 +656,6 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame) {
     }
     // Title: the game name, then its "(Maker Year)" on a smaller second line.
     // A long name shrinks to fit, then wraps onto two lines itself.
-    // On a landscape screen the vertical list runs alongside the title: keep clear of it.
-    let beside_list = f.style == WheelStyle::Vertical && !vertical_portrait(vw);
-    let max_w = vw - 2.0 * x - if beside_list { vertical_col_w(vw) + 60.0 } else { 0.0 };
     let probe = text(f.fonts.display, 92.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), Align::Left);
     let width_at_92 = |cv: &Cv, s: &str| cv.measure_text(0.0, 0.0, s, &probe).map(|m| m.width()).unwrap_or(0.0);
     let (name, suffix) = split_suffix(&e.title);
@@ -744,6 +843,39 @@ pub fn clear_black(cv: &mut Cv, w: u32, h: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_layout_keeps_the_main_wheel_on_screen() {
+        use crate::settings::{SIZE_CHOICES, MAX_SIDE_WHEELS};
+        for (vw, dh) in [(1080.0, 1920.0), (1920.0, 1080.0)] {
+            for style in [WheelStyle::Arc, WheelStyle::Flow, WheelStyle::Minimal, WheelStyle::Vertical] {
+                for position in [WheelPosition::Bottom, WheelPosition::Left, WheelPosition::Right] {
+                    for &size in SIZE_CHOICES {
+                        for side_wheels in 0..=MAX_SIDE_WHEELS {
+                            for arc in [false, true] {
+                                let l = Layout { size, position, side_wheels, arc };
+                                let t = Track::new(vw, dh, l, style);
+                                for aspect in [0.8, 1.0, 1.6, 3.0] {
+                                    let (w, h) = t.logo_size(aspect, 0.0, t.cx);
+                                    let what = format!("{vw}x{dh} {style:?} {l:?} aspect {aspect}");
+                                    assert!(t.cx - w / 2.0 >= 0.0 && t.cx + w / 2.0 <= vw, "off the side: {what}");
+                                    assert!(t.cy + h / 2.0 <= dh, "off the bottom: {what}");
+                                    // Clear of the title block (portrait) or the counter (landscape).
+                                    assert!(t.cy - h / 2.0 >= if vw < dh { 450.0 } else { 160.0 }, "under the title: {what}");
+                                    // The last side wheel's centre is on screen.
+                                    let (x, y, _) = t.place(t.side);
+                                    assert!((0.0..=vw).contains(&x) && (0.0..=dh).contains(&y), "side wheel off screen: {what}");
+                                    // Flat logos never pile up much.
+                                    let e = if position == WheelPosition::Bottom { t.bw } else { t.bh };
+                                    assert!(style == WheelStyle::Flow || t.side < 1.0 || t.next >= 0.75 * e * SIDE_SCALE, "wheels pile up: {what}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn options_menu_fits_portrait_and_landscape() {

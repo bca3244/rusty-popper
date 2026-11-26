@@ -259,9 +259,10 @@ impl App {
         if self.notice.as_ref().is_some_and(|(_, at)| at.elapsed().as_secs_f32() > overlay::NOTICE_SECS) {
             self.notice = None;
         }
-        let style = self.style;
+        let (style, layout) = (self.style, self.layout);
         let option_labels = match self.menu.as_ref().map(|m| m.kind) {
             Some(MenuKind::Sound) => self.sound_labels(),
+            Some(MenuKind::Layout) => self.layout_labels(),
             Some(MenuKind::Attract) => self.attract_labels(),
             Some(MenuKind::Options) => self.option_labels(),
             Some(MenuKind::Exit) | None => Vec::new(),
@@ -460,6 +461,7 @@ impl App {
         }
         let frame = wheel::Frame {
             style,
+            layout,
             wheel: &g.wheel,
             entries: &g.entries,
             order: &self.view,
@@ -477,13 +479,14 @@ impl App {
         if let Some(menu) = &self.menu {
             let names: Vec<&str> = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.to_vec(),
-                MenuKind::Options | MenuKind::Attract | MenuKind::Sound => option_labels.iter().map(String::as_str).collect(),
+                MenuKind::Options | MenuKind::Attract | MenuKind::Sound | MenuKind::Layout => option_labels.iter().map(String::as_str).collect(),
             };
             let title = match menu.kind {
                 MenuKind::Exit => "Exit",
                 MenuKind::Options => "Options",
                 MenuKind::Attract => "Attract Mode",
                 MenuKind::Sound => "Sound",
+                MenuKind::Layout => "Layout",
             };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw, lh, &view, &g.fonts);

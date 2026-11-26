@@ -135,7 +135,7 @@ impl App {
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
         let labels = vec![
-            format!("Wheel Style: {}", self.style.label()),
+            "Layout \u{203a}".to_string(),
             "Attract Mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
             format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
@@ -152,7 +152,48 @@ impl App {
         labels
     }
 
-    /// Labels for Options → Attract mode, with current values.
+    /// Labels for Options → Layout, with current values.
+    pub(crate) fn layout_labels(&self) -> Vec<String> {
+        let l = self.layout;
+        LAYOUT_ROWS
+            .iter()
+            .map(|row| match row {
+                LayoutRow::Template if l != self.style.template() => format!("Template: {} (Changed)", self.style.label()),
+                LayoutRow::Template => format!("Template: {}", self.style.label()),
+                LayoutRow::Size => format!("Wheel Size: {}%", l.size),
+                LayoutRow::Position => format!("Position: {}", l.position.label()),
+                LayoutRow::SideWheels => format!("Wheels Each Side: {}", l.side_wheels),
+                LayoutRow::Arc => format!("Arc: {}", if l.arc { "On" } else { "Off" }),
+                LayoutRow::Reset => "Reset to Template".to_string(),
+                LayoutRow::Back => "Back".to_string(),
+            })
+            .collect()
+    }
+
+    /// Switches to the next layout template, which resets the layout to it.
+    pub(crate) fn next_template(&mut self) {
+        self.style = self.style.toggled();
+        self.layout = self.style.template();
+    }
+
+    /// Cycles the value on Options → Layout row `row`, applies it, and saves it.
+    pub(crate) fn change_layout(&mut self, row: LayoutRow) {
+        let l = &mut self.layout;
+        match row {
+            LayoutRow::Template => self.next_template(),
+            LayoutRow::Size => {
+                let i = settings::SIZE_CHOICES.iter().position(|&c| c > l.size).unwrap_or(0);
+                l.size = settings::SIZE_CHOICES[i];
+            }
+            LayoutRow::Position => l.position = l.position.toggled(),
+            LayoutRow::SideWheels => l.side_wheels = if l.side_wheels >= settings::MAX_SIDE_WHEELS { 0 } else { l.side_wheels + 1 },
+            LayoutRow::Arc => l.arc = !l.arc,
+            LayoutRow::Reset => self.layout = self.style.template(),
+            LayoutRow::Back => return,
+        }
+        self.save_settings();
+    }
+
     /// The rows of Options → Attract mode: its settings only while it's on.
     pub(crate) fn attract_rows(&self) -> Vec<AttractRow> {
         use AttractRow::*;
@@ -245,7 +286,6 @@ impl App {
     /// Cycles the value on Options row `row`, applies it, and saves it.
     pub(crate) fn change_option(&mut self, row: usize) {
         match row {
-            STYLE_ROW => self.style = self.style.toggled(),
             DOF_ROW => {
                 let on = !self.dof.enabled;
                 self.dof.set_enabled(on);
@@ -306,6 +346,13 @@ impl App {
         let status = self.updater.status();
         remote::SettingsView {
             style: self.style.key(),
+            size: self.layout.size,
+            size_choices: settings::SIZE_CHOICES,
+            position: self.layout.position.key(),
+            side_wheels: self.layout.side_wheels,
+            max_side_wheels: settings::MAX_SIDE_WHEELS,
+            arc: self.layout.arc,
+            layout_changed: self.layout != self.style.template(),
             attract: self.attract.enabled,
             attract_idle: self.attract.idle_secs,
             attract_interval: self.attract.interval_secs,
@@ -347,7 +394,16 @@ impl App {
         let percent = || value.parse::<i32>().ok().filter(|v| (0..=100).contains(v)).ok_or_else(bad);
         let choice = |choices: &[u64]| value.parse::<u64>().ok().filter(|v| choices.contains(v)).ok_or_else(bad);
         match key {
-            "style" => self.style = WheelStyle::parse(value).ok_or_else(bad)?,
+            // Picking a template resets the layout to it, as on the cabinet.
+            "style" => {
+                self.style = WheelStyle::parse(value).ok_or_else(bad)?;
+                self.layout = self.style.template();
+            }
+            "size" => self.layout.size = value.parse::<u32>().ok().filter(|v| settings::SIZE_CHOICES.contains(v)).ok_or_else(bad)?,
+            "position" => self.layout.position = WheelPosition::parse(value).ok_or_else(bad)?,
+            "side_wheels" => self.layout.side_wheels = value.parse::<u32>().ok().filter(|v| *v <= settings::MAX_SIDE_WHEELS).ok_or_else(bad)?,
+            "arc" => self.layout.arc = on()?,
+            "layout_reset" => self.layout = self.style.template(),
             "attract" => self.attract.enabled = on()?,
             "attract_idle" => self.attract.idle_secs = choice(ATTRACT_IDLE_CHOICES)?,
             "attract_interval" => self.attract.interval_secs = choice(ATTRACT_INTERVAL_CHOICES)?,
@@ -388,6 +444,7 @@ impl App {
     fn save_settings(&self) {
         let v = settings::Editable {
             style: self.style,
+            layout: self.layout,
             attract_enabled: self.attract.enabled,
             attract_idle_secs: self.attract.idle_secs,
             attract_interval_secs: self.attract.interval_secs,
@@ -449,6 +506,7 @@ impl App {
                 MenuKind::Options => OPTION_ROWS,
                 MenuKind::Attract => attract_rows.len(),
                 MenuKind::Sound => sound_rows.len(),
+                MenuKind::Layout => LAYOUT_ROWS.len(),
             };
             match action {
                 Prev | PagePrev | LetterPrev => {
@@ -478,6 +536,18 @@ impl App {
                         }
                         (MenuKind::Attract, _) => {
                             self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: ATTRACT_ROW, opened: Instant::now() });
+                            return;
+                        }
+                        (MenuKind::Options, LAYOUT_ROW) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Layout, selected: 0, opened: Instant::now() });
+                            return;
+                        }
+                        (MenuKind::Layout, c) if LAYOUT_ROWS.get(c).is_some_and(|r| *r != LayoutRow::Back) => {
+                            self.change_layout(LAYOUT_ROWS[c]);
+                            return;
+                        }
+                        (MenuKind::Layout, _) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: LAYOUT_ROW, opened: Instant::now() });
                             return;
                         }
                         (MenuKind::Options, SOUND_ROW) => {
@@ -553,7 +623,7 @@ impl App {
             // Saved like the Options row, so a later save of any other
             // setting (here or from the phone) doesn't save it by surprise.
             ToggleStyle => {
-                self.style = self.style.toggled();
+                self.next_template();
                 self.save_settings();
             }
             Start => {
