@@ -145,7 +145,7 @@ type Cv = Canvas<OpenGl>;
 pub fn draw(cv: &mut Cv, w: f32, h: f32, f: &Frame) {
     // The design is 1080 units on the short side, so a portrait playfield gets
     // the same element sizes as a landscape one (1080 wide, extra height above
-    // the wheel); a row of wheels that would not fit is squeezed (see Track).
+    // the wheel); horizontal spacing is set per row in Track.
     let s = (h / DESIGN_H).min(w / DESIGN_H);
     let (vw, dh) = (w / s, h / s);
     cv.save();
@@ -315,6 +315,9 @@ struct Track {
     /// Half the row's length (from the main wheel to either end).
     half: f32,
     vw: f32,
+    /// The size along the row that the spacing is worked out for (tests check it).
+    #[cfg_attr(not(test), allow(dead_code))]
+    e: f32,
 }
 
 impl Track {
@@ -327,48 +330,37 @@ impl Track {
         // counter (landscape) down to near the bottom.
         let (lo, hi) = if side_row { (vertical_col_top(vw), dh - 50.0) } else { (0.0, vw) };
         let half = (hi - lo) / 2.0;
-        // The wheels' size along the row.
-        let e = if side_row { bh } else { bw };
-        let (mut first, mut next) = if covers {
+        // The wheels' size along the row. Along the bottom most wheel images
+        // are round or a little wide, narrower than the box: space them for
+        // that (a very wide one may overlap its neighbour a little). Covers
+        // and Minimal (neighbours at the screen edges) keep the box width.
+        let plain = style == WheelStyle::Minimal;
+        let e = if side_row { bh } else if covers || plain { bw } else { (bw + bh) / 2.0 };
+        // Exactly as many wheels as asked for: more than fit overlap or run
+        // off the screen, which is the owner's choice.
+        let (first, next) = if covers {
             // Covers overlap like a shelf of records.
             (0.75 * e, 0.52 * e)
         } else {
-            let gap = 0.12 * e;
+            let gap = 0.06 * e;
             (0.5 * e * (1.0 + SIDE_SCALE) + gap, e * SIDE_SCALE + gap)
         };
-        let mut side = layout.side_wheels as f32;
-        // When that many wheels won't fit, show fewer (flat logos would pile
-        // up), then squeeze the spacing a little: the last one's centre stays
-        // on screen (a side row keeps all of it in).
-        if side >= 1.0 {
-            let room = half - e * SIDE_SCALE * if side_row { 0.5 } else { 0.3 };
-            let mut last = first + (side - 1.0) * next;
-            while !covers && side > 1.0 && room < 0.8 * last {
-                side -= 1.0;
-                last -= next;
-            }
-            if last > room {
-                let f = (room / last).max(0.15);
-                first *= f;
-                next *= f;
-            }
-        }
+        let side = layout.side_wheels as f32;
         let last = if side >= 1.0 { first + (side - 1.0) * next } else { 0.0 };
-        // How far Arc bends the last wheel towards the edge.
-        let bulge = if layout.arc { ARC_R * (1.0 - (last / ARC_R).min(PI / 2.0).cos()) } else { 0.0 };
+        // How far Arc bends the last wheel on screen towards the edge.
+        let bulge = if layout.arc { ARC_R * (1.0 - (last.min(half) / ARC_R).min(PI / 2.0).cos()) } else { 0.0 };
         // A side row hugs its edge: a round logo sits 40 units from it.
         let inset = 40.0 + bw.min(bh) / 2.0 + bulge;
         let (cx, cy) = match layout.position {
             WheelPosition::Bottom => {
                 // Arc's side wheels drop lower; covers need room for their reflection.
                 let lift = if layout.arc { 60.0 } else { 0.0 } + if covers { 0.35 * bh } else { 0.0 };
-                // ...but never so low that the last one drops off the screen.
-                (vw / 2.0, (dh - 50.0 - bh / 2.0 - lift).min(dh - 30.0 - bulge))
+                (vw / 2.0, dh - 50.0 - bh / 2.0 - lift)
             }
             WheelPosition::Right => (vw - inset, (lo + hi) / 2.0),
             WheelPosition::Left => (inset, (lo + hi) / 2.0),
         };
-        Track { pos: layout.position, covers, plain: style == WheelStyle::Minimal, arc: layout.arc, bw, bh, cx, cy, first, next, side, half, vw }
+        Track { pos: layout.position, covers, plain, arc: layout.arc, bw, bh, cx, cy, first, next, side, half, vw, e }
     }
 
     fn side_row(&self) -> bool {
@@ -862,18 +854,27 @@ mod tests {
                                     assert!(t.cy + h / 2.0 <= dh, "off the bottom: {what}");
                                     // Clear of the title block (portrait) or the counter (landscape).
                                     assert!(t.cy - h / 2.0 >= if vw < dh { 450.0 } else { 160.0 }, "under the title: {what}");
-                                    // The last side wheel's centre is on screen.
-                                    let (x, y, _) = t.place(t.side);
-                                    assert!((0.0..=vw).contains(&x) && (0.0..=dh).contains(&y), "side wheel off screen: {what}");
-                                    // Flat logos never pile up much.
-                                    let e = if position == WheelPosition::Bottom { t.bw } else { t.bh };
-                                    assert!(style == WheelStyle::Flow || t.side < 1.0 || t.next >= 0.75 * e * SIDE_SCALE, "wheels pile up: {what}");
+                                    // Every wheel asked for is drawn, spaced so flat logos don't pile up.
+                                    assert_eq!(t.side, side_wheels as f32, "{what}");
+                                    assert!(style == WheelStyle::Flow || t.next >= t.e * SIDE_SCALE, "wheels pile up: {what}");
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn arc_fits_two_wheels_each_side_on_the_cabinet() {
+        // Portrait playfield, Arc template at its own size and at 100%:
+        // the second wheel's centre is on screen.
+        for size in [WheelStyle::Arc.template().size, 100] {
+            let l = Layout { size, ..WheelStyle::Arc.template() };
+            let t = Track::new(1080.0, 1920.0, l, WheelStyle::Arc);
+            let (x, _, _) = t.place(2.0);
+            assert!(x <= 1080.0 - 40.0, "Arc at {size}%: second wheel at {x}");
         }
     }
 
