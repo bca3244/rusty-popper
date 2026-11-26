@@ -7,6 +7,7 @@
 //! # size = 80          # main wheel size, percent (60-150)
 //! # position = "bottom" # or "left", "right"
 //! # side_wheels = 2    # wheels shown each side of the main one (0-5)
+//! # spacing = 100      # gap between the wheels, percent (50-200)
 //! # arc = true         # curve the row of wheels
 //!
 //! [playfield]
@@ -149,6 +150,8 @@ impl WheelPosition {
 pub const SIZE_CHOICES: &[u32] = &[60, 70, 80, 90, 100, 110, 120, 130, 140, 150];
 /// The most wheels shown on each side of the main one.
 pub const MAX_SIDE_WHEELS: u32 = 5;
+/// Wheel spacings (percent of the template's) that Options → Layout cycles through.
+pub const SPACING_CHOICES: &[u32] = &[50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 175, 200];
 
 /// How the wheel is laid out (Options → Layout). A template (the wheel
 /// style) sets all of these; each can then be changed on its own.
@@ -159,6 +162,8 @@ pub struct Layout {
     pub position: WheelPosition,
     /// Wheels shown on each side of the main one (0..=MAX_SIDE_WHEELS).
     pub side_wheels: u32,
+    /// How far apart the wheels are, percent (one of SPACING_CHOICES).
+    pub spacing: u32,
     /// Whether the row of wheels curves (round a big wheel off the screen edge).
     pub arc: bool,
 }
@@ -172,7 +177,7 @@ impl WheelStyle {
             WheelStyle::Minimal => (120, WheelPosition::Bottom, 1, false),
             WheelStyle::Vertical => (100, WheelPosition::Right, 3, false),
         };
-        Layout { size, position, side_wheels, arc }
+        Layout { size, position, side_wheels, spacing: 100, arc }
     }
 }
 
@@ -180,6 +185,9 @@ impl Layout {
     /// A size from the file, snapped to the nearest choice.
     fn snap_size(v: u32) -> u32 {
         *SIZE_CHOICES.iter().min_by_key(|c| c.abs_diff(v)).unwrap()
+    }
+    fn snap_spacing(v: u32) -> u32 {
+        *SPACING_CHOICES.iter().min_by_key(|c| c.abs_diff(v)).unwrap()
     }
 }
 
@@ -196,6 +204,8 @@ pub struct WheelSettings {
     pub position: Option<WheelPosition>,
     #[serde(default, deserialize_with = "lenient_u32")]
     pub side_wheels: Option<u32>,
+    #[serde(default, deserialize_with = "lenient_u32")]
+    pub spacing: Option<u32>,
     #[serde(default, deserialize_with = "lenient_bool")]
     pub arc: Option<bool>,
 }
@@ -223,6 +233,7 @@ impl WheelSettings {
             size: self.size.map_or(t.size, Layout::snap_size),
             position: self.position.unwrap_or(t.position),
             side_wheels: self.side_wheels.map_or(t.side_wheels, |n| n.min(MAX_SIDE_WHEELS)),
+            spacing: self.spacing.map_or(t.spacing, Layout::snap_spacing),
             arc: self.arc.unwrap_or(t.arc),
         }
     }
@@ -524,10 +535,11 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     // by hand still brings that template's whole layout.
     let t = v.style.template();
     let l = v.layout;
-    let layout_keys: [(&str, Option<toml_edit::Value>); 4] = [
+    let layout_keys: [(&str, Option<toml_edit::Value>); 5] = [
         ("size", (l.size != t.size).then(|| (l.size as i64).into())),
         ("position", (l.position != t.position).then(|| l.position.key().into())),
         ("side_wheels", (l.side_wheels != t.side_wheels).then(|| (l.side_wheels as i64).into())),
+        ("spacing", (l.spacing != t.spacing).then(|| (l.spacing as i64).into())),
         ("arc", (l.arc != t.arc).then(|| l.arc.into())),
     ];
     for (key, val) in layout_keys {
@@ -620,12 +632,12 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, layout: Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, arc: true }, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
+        let v = Editable { style: WheelStyle::Flow, layout: Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, spacing: 70, arc: true }, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
         assert_eq!(s.wheel.style, WheelStyle::Flow);
-        assert_eq!(s.wheel.layout(), Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, arc: true });
+        assert_eq!(s.wheel.layout(), Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, spacing: 70, arc: true });
         assert_eq!(s.playfield.ui_rotation, Some(270));
         assert!(!s.attract.enabled);
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
@@ -680,8 +692,8 @@ mod tests {
         assert_eq!(s.wheel.layout(), WheelStyle::Vertical.template());
         assert_eq!(s.wheel.layout().position, WheelPosition::Right);
         // Values the file sets win; out-of-range ones are brought into range.
-        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"Left\"\nside_wheels = 9\narc = false\n").unwrap();
-        assert_eq!(s.wheel.layout(), Layout { size: 130, position: WheelPosition::Left, side_wheels: MAX_SIDE_WHEELS, arc: false });
+        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"Left\"\nside_wheels = 9\nspacing = 180\narc = false\n").unwrap();
+        assert_eq!(s.wheel.layout(), Layout { size: 130, position: WheelPosition::Left, side_wheels: MAX_SIDE_WHEELS, spacing: 175, arc: false });
         // Unreadable values fall back to the template, keeping the rest of the file.
         let s = Settings::parse("[wheel]\nstyle = \"minimal\"\nsize = -10\nposition = \"up\"\nside_wheels = 1.5\narc = \"on\"\n[dof]\nenabled = true\n").unwrap();
         assert_eq!(s.wheel.layout(), WheelStyle::Minimal.template());
@@ -697,7 +709,7 @@ mod tests {
         assert_eq!(Settings::parse(&edited).unwrap().wheel.layout(), Layout { position: WheelPosition::Left, ..WheelStyle::Vertical.template() });
         for t in [WheelStyle::Arc, WheelStyle::Flow, WheelStyle::Minimal, WheelStyle::Vertical] {
             let l = t.template();
-            assert!(SIZE_CHOICES.contains(&l.size) && l.side_wheels <= MAX_SIDE_WHEELS);
+            assert!(SIZE_CHOICES.contains(&l.size) && SPACING_CHOICES.contains(&l.spacing) && l.side_wheels <= MAX_SIDE_WHEELS);
         }
         let mut p = WheelPosition::Bottom;
         for _ in 0..3 {

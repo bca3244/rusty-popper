@@ -345,6 +345,9 @@ impl Track {
             let gap = 0.06 * e;
             (0.5 * e * (1.0 + SIDE_SCALE) + gap, e * SIDE_SCALE + gap)
         };
+        // Wheel Spacing stretches or tightens the whole row.
+        let k_space = layout.spacing as f32 / 100.0;
+        let (first, next) = (first * k_space, next * k_space);
         let side = layout.side_wheels as f32;
         let last = if side >= 1.0 { first + (side - 1.0) * next } else { 0.0 };
         // How far Arc bends the last wheel on screen towards the edge.
@@ -838,14 +841,14 @@ mod tests {
 
     #[test]
     fn every_layout_keeps_the_main_wheel_on_screen() {
-        use crate::settings::{SIZE_CHOICES, MAX_SIDE_WHEELS};
+        use crate::settings::{SIZE_CHOICES, SPACING_CHOICES, MAX_SIDE_WHEELS};
         for (vw, dh) in [(1080.0, 1920.0), (1920.0, 1080.0)] {
             for style in [WheelStyle::Arc, WheelStyle::Flow, WheelStyle::Minimal, WheelStyle::Vertical] {
                 for position in [WheelPosition::Bottom, WheelPosition::Left, WheelPosition::Right] {
                     for &size in SIZE_CHOICES {
                         for side_wheels in 0..=MAX_SIDE_WHEELS {
-                            for arc in [false, true] {
-                                let l = Layout { size, position, side_wheels, arc };
+                            for (spacing, arc) in SPACING_CHOICES.iter().flat_map(|&sp| [(sp, false), (sp, true)]) {
+                                let l = Layout { size, position, side_wheels, spacing, arc };
                                 let t = Track::new(vw, dh, l, style);
                                 for aspect in [0.8, 1.0, 1.6, 3.0] {
                                     let (w, h) = t.logo_size(aspect, 0.0, t.cx);
@@ -856,7 +859,7 @@ mod tests {
                                     assert!(t.cy - h / 2.0 >= if vw < dh { 450.0 } else { 160.0 }, "under the title: {what}");
                                     // Every wheel asked for is drawn, spaced so flat logos don't pile up.
                                     assert_eq!(t.side, side_wheels as f32, "{what}");
-                                    assert!(style == WheelStyle::Flow || t.next >= t.e * SIDE_SCALE, "wheels pile up: {what}");
+                                    assert!(style == WheelStyle::Flow || spacing < 100 || t.next >= t.e * SIDE_SCALE, "wheels pile up: {what}");
                                 }
                             }
                         }

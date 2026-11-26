@@ -656,11 +656,12 @@ enum LayoutRow {
     Size,
     Position,
     SideWheels,
+    Spacing,
     Arc,
     Reset,
     Back,
 }
-const LAYOUT_ROWS: &[LayoutRow] = &[LayoutRow::Template, LayoutRow::Size, LayoutRow::Position, LayoutRow::SideWheels, LayoutRow::Arc, LayoutRow::Reset, LayoutRow::Back];
+const LAYOUT_ROWS: &[LayoutRow] = &[LayoutRow::Template, LayoutRow::Size, LayoutRow::Position, LayoutRow::SideWheels, LayoutRow::Spacing, LayoutRow::Arc, LayoutRow::Reset, LayoutRow::Back];
 
 /// The rows of Options → Sound (see `App::sound_rows`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

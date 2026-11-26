@@ -106,6 +106,8 @@ pub struct SettingsView {
     pub position: &'static str,
     pub side_wheels: u32,
     pub max_side_wheels: u32,
+    pub spacing: u32,
+    pub spacing_choices: &'static [u32],
     pub arc: bool,
     /// The layout differs from the template's.
     pub layout_changed: bool,
