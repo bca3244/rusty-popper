@@ -83,7 +83,7 @@ impl App {
                 ("hwdec", "auto-safe".to_string()),
                 ("osd-level", "0".to_string()),
                 ("aid", if audio { "auto" } else { "no" }.to_string()),
-                ("volume", if screen.slot == Slot::PlayField { self.volume } else { screen.volume }.to_string()),
+                ("volume", if screen.slot == Slot::PlayField { self.video_volume() } else { screen.volume }.to_string()),
             ];
             // Don't scan each video's folder for subtitles, audio tracks or cover art.
             let optional = [("sub-auto", "no"), ("audio-file-auto", "no"), ("cover-art-auto", "no")];

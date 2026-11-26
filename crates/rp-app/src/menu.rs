@@ -155,28 +155,93 @@ impl App {
     }
 
     /// Labels for Options → Attract mode, with current values.
+    /// The rows of Options → Attract mode: its settings only while it's on.
+    pub(crate) fn attract_rows(&self) -> Vec<AttractRow> {
+        use AttractRow::*;
+        if self.attract.enabled {
+            vec![Toggle, StartsAfter, TimePerGame, Back]
+        } else {
+            vec![Toggle, Back]
+        }
+    }
+
     pub(crate) fn attract_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
         let mins = |s: u64| if s.checked_rem(60) == Some(0) { format!("{} min", s / 60) } else { format!("{s} s") };
-        vec![
-            format!("Attract mode: {}", onoff(self.attract.enabled)),
-            format!("Starts after: {}", mins(self.attract.idle_secs)),
-            format!("Time per game: {} s", self.attract.interval_secs),
-            "Back".to_string(),
-        ]
+        self.attract_rows()
+            .into_iter()
+            .map(|row| match row {
+                AttractRow::Toggle => format!("Attract mode: {}", onoff(self.attract.enabled)),
+                AttractRow::StartsAfter => format!("Starts after: {}", mins(self.attract.idle_secs)),
+                AttractRow::TimePerGame => format!("Time per game: {} s", self.attract.interval_secs),
+                AttractRow::Back => "Back".to_string(),
+            })
+            .collect()
+    }
+
+    /// The rows of Options → Sound: each volume only while its sound is on.
+    pub(crate) fn sound_rows(&self) -> Vec<SoundRow> {
+        use SoundRow::*;
+        let mut rows = vec![Video];
+        if self.video_sound {
+            rows.push(VideoVolume);
+        }
+        rows.push(Effects);
+        if self.sounds.enabled {
+            rows.push(EffectsVolume);
+        }
+        rows.push(GameAudio);
+        if self.game_audio.enabled {
+            rows.push(GameAudioVolume);
+        }
+        rows.push(Back);
+        rows
     }
 
     /// Labels for Options → Sound, with current values.
     pub(crate) fn sound_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
-        vec![
-            format!("Video volume: {}%", self.volume),
-            format!("Sound effects: {}", onoff(self.sounds.enabled)),
-            format!("Effects volume: {}%", self.sounds.volume),
-            format!("Game audio: {}", onoff(self.game_audio.enabled)),
-            format!("Game audio volume: {}%", self.game_audio.volume),
-            "Back".to_string(),
-        ]
+        self.sound_rows()
+            .into_iter()
+            .map(|row| match row {
+                SoundRow::Video => format!("Video sound: {}", onoff(self.video_sound)),
+                SoundRow::VideoVolume => format!("Video volume: {}%", self.volume),
+                SoundRow::Effects => format!("Sound effects: {}", onoff(self.sounds.enabled)),
+                SoundRow::EffectsVolume => format!("Effects volume: {}%", self.sounds.volume),
+                SoundRow::GameAudio => format!("Game audio: {}", onoff(self.game_audio.enabled)),
+                SoundRow::GameAudioVolume => format!("Game audio volume: {}%", self.game_audio.volume),
+                SoundRow::Back => "Back".to_string(),
+            })
+            .collect()
+    }
+
+    /// Keeps the open menu's highlight on a row that exists (a submenu's rows
+    /// change when the phone switches a sound or attract mode on or off).
+    pub(crate) fn clamp_menu(&mut self) {
+        let n = match self.menu.as_ref().map(|m| m.kind) {
+            Some(MenuKind::Attract) => self.attract_rows().len(),
+            Some(MenuKind::Sound) => self.sound_rows().len(),
+            _ => return,
+        };
+        if let Some(m) = self.menu.as_mut() {
+            m.selected = m.selected.min(n - 1);
+        }
+    }
+
+    /// The playfield video's volume as mpv should play it (0 with video sound off).
+    pub(crate) fn video_volume(&self) -> i32 {
+        if self.video_sound {
+            self.volume
+        } else {
+            0
+        }
+    }
+
+    /// Sends the video volume to the playfield player.
+    fn apply_video_volume(&self) {
+        if let Some(g) = &self.gfx {
+            let _ = g.outs[0].player.command_async(&["set", "volume", &self.video_volume().to_string()]);
+        }
     }
 
     /// Cycles the value on Options row `row`, applies it, and saves it.
@@ -206,34 +271,32 @@ impl App {
     }
 
     /// Cycles the value on Options → Attract mode row `row`, applies it, and saves it.
-    pub(crate) fn change_attract(&mut self, row: usize) {
+    pub(crate) fn change_attract(&mut self, row: AttractRow) {
         match row {
-            0 => self.attract.enabled = !self.attract.enabled,
-            1 => self.attract.idle_secs = next_choice(ATTRACT_IDLE_CHOICES, self.attract.idle_secs),
-            2 => self.attract.interval_secs = next_choice(ATTRACT_INTERVAL_CHOICES, self.attract.interval_secs),
-            _ => return,
+            AttractRow::Toggle => self.attract.enabled = !self.attract.enabled,
+            AttractRow::StartsAfter => self.attract.idle_secs = next_choice(ATTRACT_IDLE_CHOICES, self.attract.idle_secs),
+            AttractRow::TimePerGame => self.attract.interval_secs = next_choice(ATTRACT_INTERVAL_CHOICES, self.attract.interval_secs),
+            AttractRow::Back => return,
         }
         self.save_settings();
     }
 
     /// Cycles the value on Options → Sound row `row`, applies it, and saves it.
-    pub(crate) fn change_sound(&mut self, row: usize) {
+    pub(crate) fn change_sound(&mut self, row: SoundRow) {
         match row {
-            0 => {
+            SoundRow::Video => {
+                self.video_sound = !self.video_sound;
+                self.apply_video_volume();
+            }
+            SoundRow::VideoVolume => {
                 self.volume = next_volume(self.volume);
-                if let Some(g) = &self.gfx {
-                    let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
-                }
+                self.apply_video_volume();
             }
-            1 => self.sounds.enabled = !self.sounds.enabled,
-            3 => self.game_audio.set_enabled(!self.game_audio.enabled),
-            4 => {
-                self.game_audio.set_volume(next_volume(self.game_audio.volume));
-            }
-            2 => {
-                self.sounds.set_volume(next_volume(self.sounds.volume));
-            }
-            _ => return,
+            SoundRow::Effects => self.sounds.enabled = !self.sounds.enabled,
+            SoundRow::EffectsVolume => self.sounds.set_volume(next_volume(self.sounds.volume)),
+            SoundRow::GameAudio => self.game_audio.set_enabled(!self.game_audio.enabled),
+            SoundRow::GameAudioVolume => self.game_audio.set_volume(next_volume(self.game_audio.volume)),
+            SoundRow::Back => return,
         }
         self.save_settings();
     }
@@ -250,6 +313,7 @@ impl App {
             attract_interval: self.attract.interval_secs,
             idle_choices: ATTRACT_IDLE_CHOICES,
             interval_choices: ATTRACT_INTERVAL_CHOICES,
+            video_sound: self.video_sound,
             volume: self.volume,
             sfx: self.sounds.enabled,
             sfx_volume: self.sounds.volume,
@@ -289,11 +353,13 @@ impl App {
             "attract" => self.attract.enabled = on()?,
             "attract_idle" => self.attract.idle_secs = choice(ATTRACT_IDLE_CHOICES)?,
             "attract_interval" => self.attract.interval_secs = choice(ATTRACT_INTERVAL_CHOICES)?,
+            "video_sound" => {
+                self.video_sound = on()?;
+                self.apply_video_volume();
+            }
             "volume" => {
                 self.volume = percent()?;
-                if let Some(g) = &self.gfx {
-                    let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
-                }
+                self.apply_video_volume();
             }
             "sfx" => self.sounds.enabled = on()?,
             "sfx_volume" => self.sounds.set_volume(percent()?),
@@ -327,6 +393,7 @@ impl App {
             attract_enabled: self.attract.enabled,
             attract_idle_secs: self.attract.idle_secs,
             attract_interval_secs: self.attract.interval_secs,
+            video_sound: self.video_sound,
             volume: self.volume,
             sound_enabled: self.sounds.enabled,
             sound_volume: self.sounds.volume,
@@ -374,13 +441,15 @@ impl App {
             self.close_card();
             return;
         }
+        // The submenus' rows depend on what's switched on.
+        let (attract_rows, sound_rows) = (self.attract_rows(), self.sound_rows());
         // While a menu is open, browsing buttons move its highlight.
         if let Some(menu) = self.menu.as_mut() {
             let n = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.len(),
                 MenuKind::Options => OPTION_ROWS,
-                MenuKind::Attract => ATTRACT_ROWS,
-                MenuKind::Sound => SOUND_ROWS,
+                MenuKind::Attract => attract_rows.len(),
+                MenuKind::Sound => sound_rows.len(),
             };
             match action {
                 Prev | PagePrev | LetterPrev => {
@@ -404,8 +473,8 @@ impl App {
                             self.menu = Some(ExitMenu { kind: MenuKind::Attract, selected: 0, opened: Instant::now() });
                             return;
                         }
-                        (MenuKind::Attract, c) if c < ATTRACT_ROWS - 1 => {
-                            self.change_attract(c);
+                        (MenuKind::Attract, c) if attract_rows.get(c).is_some_and(|r| *r != AttractRow::Back) => {
+                            self.change_attract(attract_rows[c]);
                             return;
                         }
                         (MenuKind::Attract, _) => {
@@ -420,8 +489,8 @@ impl App {
                             self.change_option(c);
                             return;
                         }
-                        (MenuKind::Sound, c) if c < SOUND_ROWS - 1 => {
-                            self.change_sound(c);
+                        (MenuKind::Sound, c) if sound_rows.get(c).is_some_and(|r| *r != SoundRow::Back) => {
+                            self.change_sound(sound_rows[c]);
                             return;
                         }
                         // Back from Sound returns to Options, on the Sound row.

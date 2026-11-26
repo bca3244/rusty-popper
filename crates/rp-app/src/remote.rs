@@ -100,6 +100,7 @@ pub struct SettingsView {
     pub attract_interval: u64,
     pub idle_choices: &'static [u64],
     pub interval_choices: &'static [u64],
+    pub video_sound: bool,
     pub volume: i32,
     pub sfx: bool,
     pub sfx_volume: i32,
@@ -125,7 +126,6 @@ pub struct GameInfo {
     pub emulator: String,
     pub manufacturer: Option<String>,
     pub year: Option<i64>,
-    pub players: Option<i64>,
     pub rom: Option<String>,
     pub file: String,
     pub tags: Vec<String>,
@@ -796,6 +796,8 @@ impl crate::App {
             match cmd {
                 Command::Set(key, value) => {
                     let _ = reply.send(self.set_from_remote(&key, &value));
+                    // A submenu open on the cabinet may have lost rows.
+                    self.clamp_menu();
                 }
                 // Leaving mid-game would skip the emulator's close-down script.
                 Command::Exit if self.playing.is_some() => {
@@ -845,7 +847,6 @@ impl crate::App {
                         emulator: emu.name.clone(),
                         manufacturer: game.manufacturer.clone(),
                         year: game.year,
-                        players: game.players,
                         rom: game.rom.clone(),
                         file: game.file_name.clone(),
                         tags: game.tags.clone(),
