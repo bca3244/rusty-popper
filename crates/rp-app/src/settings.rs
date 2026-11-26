@@ -82,7 +82,7 @@ impl WheelStyle {
     pub fn label(self) -> &'static str {
         match self {
             WheelStyle::Arc => "Arc",
-            WheelStyle::Flow => "Cover flow",
+            WheelStyle::Flow => "Cover Flow",
             WheelStyle::Minimal => "Minimal",
             WheelStyle::Vertical => "Vertical",
         }

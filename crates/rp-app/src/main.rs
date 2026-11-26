@@ -622,7 +622,7 @@ const FORCE_AFTER: Duration = Duration::from_secs(3);
 
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
-const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "Restart cabinet", "Shut down cabinet"];
+const EXIT_MENU: &[&str] = &["Back to Games", "Options", "Exit Rusty Popper", "Restart Cabinet", "Shut Down Cabinet"];
 
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
