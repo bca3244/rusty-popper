@@ -9,7 +9,7 @@ Fixes from the v0.2.38 code review.
 ### Fixed
 - **Game audio** no longer stops working, or keeps one track looping over a running game, after a long attract-mode session. Its player's events were never read, and mpv refuses commands once 1000 are waiting.
 - **Phone remote**: one request with a huge `Content-Length` from any device on the network could crash or hang Rusty Popper. The remote now runs on a small built-in server that refuses request bodies unread, gives every connection 5-second read and write timeouts, and answers each request on its own thread, so a phone that drops off Wi-Fi mid-download no longer blocks the page for everyone or holds up Exit.
-- **Phone remote PIN**: after 5 wrong PINs in a row, the remote refuses all requests for 30 seconds (logged).
+- **Phone remote PIN**: after 5 wrong PINs the remote refuses all requests for 30 seconds, doubling with each further lockout up to 30 minutes (logged). A page with a wrong PIN now says so and asks only every 30 seconds, so an old tab can't keep the cabinet locked.
 - **Phone remote**: an invalid PIN in `[remote] pin` now says so in Options instead of "port 8642 busy" (the port was left held).
 - **Phone remote**: the page can no longer be shown inside another site's frame, and never passes its address (with the PIN) on as a referrer.
 - **JPG info and help cards** now show (only PNG was decoded before).

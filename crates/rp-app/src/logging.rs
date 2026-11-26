@@ -38,6 +38,10 @@ impl LogFile {
             // Close it first: Windows can't rename an open file.
             self.file = None;
             *self = LogFile::open(&self.path.clone());
+            if self.len > MAX_LOG_BYTES {
+                // Couldn't move it (open in a viewer?): try again a megabyte on.
+                self.len = 0;
+            }
         }
         if let Some(f) = self.file.as_mut() {
             if f.write_all(line).is_ok() {

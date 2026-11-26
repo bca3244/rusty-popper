@@ -40,9 +40,13 @@ const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HEAD: usize = 8 << 10;
 /// Requests answered at once; more connections are closed unanswered.
 const MAX_CONNECTIONS: usize = 16;
-/// Wrong PINs in a row before requests are refused for `PIN_LOCKOUT`.
+/// Wrong PINs before requests are refused for `PIN_LOCKOUT`.
 const PIN_TRIES: u32 = 5;
 const PIN_LOCKOUT: Duration = Duration::from_secs(30);
+/// The longest lockout (after several in a row).
+const PIN_LOCKOUT_MAX: Duration = Duration::from_secs(30 * 60);
+/// Wrong PINs are forgotten after this long without one.
+const PIN_FORGET: Duration = Duration::from_secs(60 * 60);
 /// How often to look whether the cabinet's address has changed (the network
 /// can come up after Rusty Popper at boot).
 const ADDRESS_EVERY: Duration = Duration::from_secs(20);
@@ -281,12 +285,25 @@ impl Drop for Remote {
     }
 }
 
-/// Wrong-PIN throttle: after `PIN_TRIES` wrong PINs in a row, every request
-/// is refused for `PIN_LOCKOUT`. One counter for everyone: a phone that
-/// scanned the QR code never gets it wrong.
+/// One request's place in `Shared::connections`, given back when dropped.
+struct Slot(Arc<Shared>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Wrong-PIN throttle: after `PIN_TRIES` wrong PINs, every request is
+/// refused for `PIN_LOCKOUT`, doubling with each lockout in a row. One
+/// counter for everyone (a phone that scanned the QR code never gets it
+/// wrong), and a right PIN doesn't reset it, so guesses can't hide among a
+/// phone's polls. It's forgotten after `PIN_FORGET` with no wrong PIN.
 #[derive(Default)]
 struct PinGuard {
     wrong: u32,
+    lockouts: u32,
+    last_wrong: Option<std::time::Instant>,
     locked_until: Option<std::time::Instant>,
 }
 
@@ -316,17 +333,21 @@ fn serve(listener: TcpListener, shared: Arc<Shared>, tx: Sender<Request>, port: 
                     shared.connections.fetch_sub(1, Ordering::Relaxed);
                     continue;
                 }
-                let (shared, tx) = (shared.clone(), tx.clone());
+                // Gives the slot back however the request ends (a panic too),
+                // or at once if its thread can't start.
+                let slot = Slot(shared.clone());
+                let tx = tx.clone();
                 let spawned = std::thread::Builder::new().name("remote-request".into()).spawn(move || {
-                    connection(stream, &shared, &tx);
-                    shared.connections.fetch_sub(1, Ordering::Relaxed);
+                    connection(stream, &slot.0, &tx);
+                    drop(slot);
                 });
                 if spawned.is_err() {
-                    // The closure (and its count) never ran.
                     log::warn!("Phone remote: couldn't start a request thread");
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(ACCEPT_POLL),
+            // A client that gave up before we got to it: nothing wrong here.
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => {}
             Err(e) => {
                 log::warn!("Phone remote: {e}");
                 std::thread::sleep(TICK);
@@ -459,19 +480,24 @@ fn handle(req: &Req, shared: &Shared, tx: &Sender<Request>) -> Response {
 fn check_pin(shared: &Shared, given: Option<&str>) -> Option<Response> {
     let pin = shared.pin.as_deref()?;
     let mut guard = shared.pin_guard.lock().unwrap_or_else(|e| e.into_inner());
-    if guard.locked_until.is_some_and(|t| std::time::Instant::now() < t) {
-        return Some(text(429, "Too many wrong PINs: try again in a minute"));
+    let now = std::time::Instant::now();
+    if guard.locked_until.is_some_and(|t| now < t) {
+        return Some(text(429, "Too many wrong PINs: try again later"));
+    }
+    if guard.last_wrong.is_some_and(|t| now.duration_since(t) >= PIN_FORGET) {
+        *guard = PinGuard::default();
     }
     match given {
-        Some(g) if g == pin => {
-            *guard = PinGuard::default();
-            None
-        }
+        Some(g) if g == pin => None,
         Some(_) => {
             guard.wrong += 1;
+            guard.last_wrong = Some(now);
             if guard.wrong >= PIN_TRIES {
-                log::warn!("Phone remote: {PIN_TRIES} wrong PINs in a row; refusing requests for {} s", PIN_LOCKOUT.as_secs());
-                *guard = PinGuard { wrong: 0, locked_until: Some(std::time::Instant::now() + PIN_LOCKOUT) };
+                let lockout = PIN_LOCKOUT.saturating_mul(1 << guard.lockouts.min(6)).min(PIN_LOCKOUT_MAX);
+                log::warn!("Phone remote: {} wrong PINs; refusing requests for {} s", guard.wrong, lockout.as_secs());
+                guard.wrong = 0;
+                guard.lockouts += 1;
+                guard.locked_until = Some(now + lockout);
             }
             Some(text(403, "Wrong PIN: scan the QR code on the cabinet again"))
         }

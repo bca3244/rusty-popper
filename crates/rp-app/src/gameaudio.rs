@@ -107,6 +107,7 @@ impl GameAudio {
         self.enabled = on;
         self.stop();
         self.want = None;
+        self.tried = false;
     }
 }
 
