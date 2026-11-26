@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.39] - 2026-11-26
+
+### Changed
+- The exit menu now says *Restart cabinet* and *Shut down cabinet* (was *Restart computer* and *Shut down computer*), matching the phone remote.
+
 ## [0.2.38] - 2026-11-25
 
 ### Added
