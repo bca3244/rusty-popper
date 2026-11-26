@@ -17,7 +17,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Process creation flag: start a console program without a console window.
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Helper processes that live in an emulator folder but don't mean a game is
 /// still running (killed by post scripts, resident loaders, Steam's own

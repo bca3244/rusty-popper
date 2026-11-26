@@ -291,12 +291,16 @@ $("update").addEventListener("click", () => {
 async function poll1() {
   try { const r = await fetch("/api/status" + q, { cache: "no-store" }); if (r.ok) show(await r.json()); } catch (e) {}
 }
+let denied = false;
 async function poll() {
   try {
     const r = await fetch("/api/status" + q, { cache: "no-store", signal: AbortSignal.timeout(4000) });
-    if (r.status === 403) { offline = true; $("state").textContent = await r.text(); $("state").className = "state"; }
+    // Wrong PIN or locked out: say why, and ask far less often, so an old
+    // tab doesn't keep the cabinet locked for everyone.
+    if (r.status === 403 || r.status === 429) { offline = true; denied = true; $("state").textContent = await r.text(); $("state").className = "state"; }
     else if (!r.ok) throw new Error(await r.text());
     else {
+      denied = false;
       show(await r.json());
       if (offline) { offline = false; say(""); }
     }
@@ -305,7 +309,7 @@ async function poll() {
     $("state").textContent = "Cabinet not reachable";
     $("state").className = "state";
   }
-  setTimeout(poll, document.hidden ? 10000 : 2000);
+  setTimeout(poll, denied ? 30000 : document.hidden ? 10000 : 2000);
 }
 
 function say(text, err) { $("msg").textContent = text; $("msg").className = err ? "err" : ""; }

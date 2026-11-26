@@ -181,7 +181,12 @@ impl App {
             let _ = tx.send(result);
         });
         if let Err(e) = spawned {
+            // Nothing is running: undo what was set up for the game.
             log::error!("Couldn't start the game thread: {e}");
+            self.dof.suspend(false);
+            if let Some(g) = self.gfx.as_mut() {
+                g.load_logos(&self.lib.items, g.shown);
+            }
             return;
         }
         // The launch screen covers the playfield video: stop decoding it so

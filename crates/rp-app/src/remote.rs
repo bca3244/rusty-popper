@@ -2,10 +2,13 @@
 //! playing, changes the Options settings, installs updates, and can exit
 //! Rusty Popper, restart or shut down the cabinet.
 //!
-//! Off by default (Options → Phone remote, or `[remote] enabled`). One
-//! `tiny_http` server on its own thread, no async runtime: it idles waiting
-//! for a connection. The menu thread publishes a small snapshot of what's on
-//! screen whenever it changes, and picks up the page's commands each frame.
+//! Off by default (Options → Phone remote, or `[remote] enabled`). A tiny
+//! HTTP/1.1 server on std's TCP sockets, no async runtime: one thread waits
+//! for connections and each request is answered on its own short-lived
+//! thread. The page only sends GETs and body-less POSTs, so request bodies
+//! are refused unread, and every socket has read and write timeouts. The
+//! menu thread publishes a small snapshot of what's on screen whenever it
+//! changes, and picks up the page's commands each frame.
 //! A QR code in the corner of the wheel links to the page.
 //!
 //! Only machines on the local network are answered (private, link-local and
@@ -16,9 +19,10 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -26,8 +30,23 @@ use std::time::{Duration, SystemTime};
 
 /// Default port (fixed, so the link and QR code never change).
 pub const DEFAULT_PORT: u16 = 8642;
-/// How often the server thread wakes to look for a stop or a new address.
+/// How long the server thread waits after a failed accept.
 const TICK: Duration = Duration::from_secs(1);
+/// How often the server thread looks for a new connection or a stop.
+const ACCEPT_POLL: Duration = Duration::from_millis(50);
+/// A phone that stops reading or writing for this long is dropped.
+const IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// A request's head (request line and headers) may be at most this big.
+const MAX_HEAD: usize = 8 << 10;
+/// Requests answered at once; more connections are closed unanswered.
+const MAX_CONNECTIONS: usize = 16;
+/// Wrong PINs before requests are refused for `PIN_LOCKOUT`.
+const PIN_TRIES: u32 = 5;
+const PIN_LOCKOUT: Duration = Duration::from_secs(30);
+/// The longest lockout (after several in a row).
+const PIN_LOCKOUT_MAX: Duration = Duration::from_secs(30 * 60);
+/// Wrong PINs are forgotten after this long without one.
+const PIN_FORGET: Duration = Duration::from_secs(60 * 60);
 /// How often to look whether the cabinet's address has changed (the network
 /// can come up after Rusty Popper at boot).
 const ADDRESS_EVERY: Duration = Duration::from_secs(20);
@@ -140,15 +159,19 @@ struct Shared {
     /// Bumped when `url` changes.
     url_version: AtomicU64,
     stop: AtomicBool,
+    /// Requests being answered right now.
+    connections: AtomicUsize,
+    pin_guard: Mutex<PinGuard>,
+    pin: Option<String>,
+    /// `[remote] address`, also accepted as a Host name.
+    address: Option<String>,
 }
 
 /// The running web server.
 pub struct Remote {
     shared: Arc<Shared>,
     rx: Receiver<Request>,
-    server: Option<Arc<tiny_http::Server>>,
     thread: Option<JoinHandle<()>>,
-    port: u16,
     /// The last thing published, to skip unchanged snapshots.
     last_key: Option<(u8, usize)>,
     image_version: u64,
@@ -162,32 +185,35 @@ impl Remote {
     /// `wait` is how long to keep trying while the port is taken (at start
     /// the copy being replaced by a restart or update may still hold it).
     pub fn start(port: u16, pin: Option<String>, address: Option<String>, wait: Duration) -> Result<Remote> {
-        let tried_since = std::time::Instant::now();
-        let server = loop {
-            match tiny_http::Server::http(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))) {
-                Ok(s) => break Arc::new(s),
-                Err(_) if tried_since.elapsed() < wait => std::thread::sleep(Duration::from_millis(250)),
-                Err(e) => return Err(anyhow::anyhow!("{e}")).with_context(|| format!("listening on port {port}")),
-            }
-        };
         let pin = pin.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
         if pin.as_ref().is_some_and(|p| !p.chars().all(|c| c.is_ascii_alphanumeric())) {
             anyhow::bail!("the PIN may only have letters and digits");
         }
+        let tried_since = std::time::Instant::now();
+        let listener = loop {
+            match TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))) {
+                Ok(l) => break l,
+                Err(_) if tried_since.elapsed() < wait => std::thread::sleep(Duration::from_millis(250)),
+                Err(e) => return Err(e).with_context(|| format!("listening on port {port}")),
+            }
+        };
+        // Polled, so the thread notices a stop without a wake-up connection.
+        listener.set_nonblocking(true).context("setting up the listener")?;
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot { state: "menu", version: env!("CARGO_PKG_VERSION"), ..Default::default() }),
             settings: Mutex::new(SettingsView::default()),
             url: Mutex::new(make_url(&host_for(address.as_deref()), port, pin.as_deref())),
             url_version: AtomicU64::new(1),
             stop: AtomicBool::new(false),
+            connections: AtomicUsize::new(0),
+            pin_guard: Mutex::new(PinGuard::default()),
+            pin,
+            address,
         });
         let (tx, rx) = std::sync::mpsc::channel();
-        let (worker, worker_server) = (shared.clone(), server.clone());
-        let thread = std::thread::Builder::new()
-            .name("remote".into())
-            .spawn(move || serve(&worker_server, worker, tx, port, pin, address))
-            .context("starting the web server thread")?;
-        let remote = Remote { shared, rx, server: Some(server), thread: Some(thread), port, last_key: None, image_version: first_image_version(), settings_at: None };
+        let worker = shared.clone();
+        let thread = std::thread::Builder::new().name("remote".into()).spawn(move || serve(listener, worker, tx, port)).context("starting the web server thread")?;
+        let remote = Remote { shared, rx, thread: Some(thread), last_key: None, image_version: first_image_version(), settings_at: None };
         log::info!("Phone remote on {}", short_url(&remote.url().0));
         Ok(remote)
     }
@@ -249,30 +275,46 @@ impl Remote {
 
 impl Drop for Remote {
     fn drop(&mut self) {
+        // The accept loop sees this within one poll and closes the listener,
+        // so the port is free when this returns. Requests still being
+        // answered finish on their own threads (each has socket timeouts).
         self.shared.stop.store(true, Ordering::Relaxed);
-        // Wakes our thread at once.
-        if let Some(s) = &self.server {
-            s.unblock();
-        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
-        // Dropping the server closes the listener only once tiny_http's
-        // accept thread wakes. It wakes itself by connecting to the address
-        // it listens on, 0.0.0.0, which Windows refuses: wake it through
-        // localhost instead, so the port is free when this returns.
-        drop(self.server.take());
-        let _ = std::net::TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, self.port)), Duration::from_millis(300));
     }
 }
 
-/// The server thread: answers requests until told to stop.
-fn serve(server: &tiny_http::Server, shared: Arc<Shared>, tx: Sender<Request>, port: u16, pin: Option<String>, address: Option<String>) {
+/// One request's place in `Shared::connections`, given back when dropped.
+struct Slot(Arc<Shared>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Wrong-PIN throttle: after `PIN_TRIES` wrong PINs, every request is
+/// refused for `PIN_LOCKOUT`, doubling with each lockout in a row. One
+/// counter for everyone (a phone that scanned the QR code never gets it
+/// wrong), and a right PIN doesn't reset it, so guesses can't hide among a
+/// phone's polls. It's forgotten after `PIN_FORGET` with no wrong PIN.
+#[derive(Default)]
+struct PinGuard {
+    wrong: u32,
+    lockouts: u32,
+    last_wrong: Option<std::time::Instant>,
+    locked_until: Option<std::time::Instant>,
+}
+
+/// The server thread: accepts connections until told to stop, answering
+/// each on a short-lived thread so a slow or stalled phone holds up nobody.
+fn serve(listener: TcpListener, shared: Arc<Shared>, tx: Sender<Request>, port: u16) {
     let mut address_checked = std::time::Instant::now();
     while !shared.stop.load(Ordering::Relaxed) {
         if address_checked.elapsed() >= ADDRESS_EVERY {
             address_checked = std::time::Instant::now();
-            let url = make_url(&host_for(address.as_deref()), port, pin.as_deref());
+            let url = make_url(&host_for(shared.address.as_deref()), port, shared.pin.as_deref());
             if let Ok(mut u) = shared.url.lock() {
                 if *u != url {
                     log::info!("Phone remote moved to {}", short_url(&url));
@@ -281,10 +323,31 @@ fn serve(server: &tiny_http::Server, shared: Arc<Shared>, tx: Sender<Request>, p
                 }
             }
         }
-        match server.recv_timeout(TICK) {
-            Ok(Some(req)) => handle(req, &shared, &tx, pin.as_deref(), address.as_deref()),
-            Ok(None) => {}
-            Err(_) if shared.stop.load(Ordering::Relaxed) => break,
+        match listener.accept() {
+            Ok((stream, peer)) => {
+                // Nothing is read from anyone off the local network.
+                if !is_local(peer.ip()) {
+                    continue;
+                }
+                if shared.connections.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                    shared.connections.fetch_sub(1, Ordering::Relaxed);
+                    continue;
+                }
+                // Gives the slot back however the request ends (a panic too),
+                // or at once if its thread can't start.
+                let slot = Slot(shared.clone());
+                let tx = tx.clone();
+                let spawned = std::thread::Builder::new().name("remote-request".into()).spawn(move || {
+                    connection(stream, &slot.0, &tx);
+                    drop(slot);
+                });
+                if spawned.is_err() {
+                    log::warn!("Phone remote: couldn't start a request thread");
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(ACCEPT_POLL),
+            // A client that gave up before we got to it: nothing wrong here.
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => {}
             Err(e) => {
                 log::warn!("Phone remote: {e}");
                 std::thread::sleep(TICK);
@@ -294,56 +357,205 @@ fn serve(server: &tiny_http::Server, shared: Arc<Shared>, tx: Sender<Request>, p
     log::info!("Phone remote stopped");
 }
 
-fn handle(req: tiny_http::Request, shared: &Shared, tx: &Sender<Request>, pin: Option<&str>, address: Option<&str>) {
-    let from_lan = req.remote_addr().is_some_and(|a| is_local(a.ip()));
-    let host = req.headers().iter().find(|h| h.field.equiv("Host")).map(|h| h.value.as_str().to_string()).unwrap_or_default();
-    let (path, query) = req.url().split_once('?').unwrap_or((req.url(), ""));
-    let path = path.to_string();
-    let pin_ok = pin.is_none_or(|p| query_value(query, "pin").is_some_and(|v| v == p));
-    let response = if !from_lan || !host_ok(&host, address) {
-        text(403, "Forbidden")
-    } else if path == "/icon.png" || path == "/favicon.ico" || path == "/apple-touch-icon.png" {
-        // The icon needs no PIN: browsers fetch it without the page's query.
-        tiny_http::Response::from_data(crate::ICON_PNG.to_vec()).with_header(header("Content-Type", "image/png")).with_header(header("Cache-Control", "max-age=86400"))
-    } else if !pin_ok {
-        text(403, "Wrong or missing PIN: scan the QR code on the cabinet again")
-    } else {
-        let has_header = req.headers().iter().any(|h| h.field.equiv(COMMAND_HEADER));
-        match (req.method(), path.as_str()) {
-            (tiny_http::Method::Get, "/") => page(),
-            (tiny_http::Method::Get, "/api/status") => status(shared),
-            (tiny_http::Method::Get, "/api/wheel.png") => wheel_image(shared),
-            (tiny_http::Method::Get, "/api/procs") => procs(),
-            // Ended here, not on the menu thread (taskkill takes a moment). A
-            // game Rusty Popper started then ends as if it had exited.
-            (tiny_http::Method::Post, "/api/kill") if !has_header => text(403, "Missing header"),
-            (tiny_http::Method::Post, "/api/kill") => match kill_target(query) {
-                Some(target) => kill(target),
-                None => text(400, "Bad process"),
-            },
-            (tiny_http::Method::Post, p) if p.starts_with("/api/") => match command_of(p, query) {
-                None => text(404, "Not found"),
-                Some(_) if !has_header => text(403, "Missing header"),
-                Some(cmd) => run_command(cmd, tx),
-            },
-            _ => text(404, "Not found"),
-        }
-    };
-    let _ = req.respond(response);
+/// A parsed request: only what the page uses.
+#[derive(Debug, Default)]
+struct Req {
+    method: String,
+    path: String,
+    query: String,
+    host: String,
+    has_command_header: bool,
 }
 
-type Response = tiny_http::Response<std::io::Cursor<Vec<u8>>>;
+/// Why a request couldn't be read.
+#[derive(Debug, PartialEq)]
+enum BadRequest {
+    /// Closed or timed out before a full request arrived: say nothing.
+    Gone,
+    /// Answer with this status and close.
+    Status(u16, &'static str),
+}
 
-fn header(name: &str, value: &str) -> tiny_http::Header {
-    tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid header")
+/// Reads one request's head (at most `MAX_HEAD` bytes). The page never sends
+/// a body, so any request announcing one is refused unread.
+fn read_request(stream: &mut impl Read) -> Result<Req, BadRequest> {
+    let mut head = Vec::with_capacity(1024);
+    let mut buf = [0u8; 1024];
+    let end = loop {
+        let n = match stream.read(&mut buf) {
+            Ok(0) | Err(_) => return Err(BadRequest::Gone),
+            Ok(n) => n,
+        };
+        // Search only the new bytes (and the three before them).
+        let from = head.len().saturating_sub(3);
+        head.extend_from_slice(&buf[..n]);
+        let found = head[from..].windows(4).position(|w| w == b"\r\n\r\n").map(|i| from + i);
+        // Too big whether or not this read finished it.
+        if found.unwrap_or(head.len()) > MAX_HEAD {
+            return Err(BadRequest::Status(431, "Request too large"));
+        }
+        if let Some(end) = found {
+            break end;
+        }
+    };
+    let head = std::str::from_utf8(&head[..end]).map_err(|_| BadRequest::Status(400, "Bad request"))?;
+    let mut lines = head.split("\r\n");
+    let mut first = lines.next().unwrap_or_default().split(' ');
+    let (Some(method), Some(target), Some(version), None) = (first.next(), first.next(), first.next(), first.next()) else {
+        return Err(BadRequest::Status(400, "Bad request"));
+    };
+    if !version.starts_with("HTTP/1.") || !target.starts_with('/') {
+        return Err(BadRequest::Status(400, "Bad request"));
+    }
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let mut req = Req { method: method.to_string(), path: path.to_string(), query: query.to_string(), ..Default::default() };
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(BadRequest::Status(400, "Bad request"));
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if name.eq_ignore_ascii_case("Host") {
+            req.host = value.to_string();
+        } else if name.eq_ignore_ascii_case(COMMAND_HEADER) {
+            req.has_command_header = true;
+        } else if name.eq_ignore_ascii_case("Transfer-Encoding") || (name.eq_ignore_ascii_case("Content-Length") && value != "0") {
+            return Err(BadRequest::Status(413, "No request body accepted"));
+        }
+    }
+    Ok(req)
+}
+
+/// Answers one connection: one request, then close.
+fn connection(mut stream: TcpStream, shared: &Shared, tx: &Sender<Request>) {
+    // Accepted sockets may inherit the listener's non-blocking mode.
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    let response = match read_request(&mut stream) {
+        Ok(req) => handle(&req, shared, tx),
+        Err(BadRequest::Gone) => return,
+        Err(BadRequest::Status(code, why)) => text(code, why),
+    };
+    let _ = response.write_to(&mut stream);
+    let _ = stream.flush();
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
+fn handle(req: &Req, shared: &Shared, tx: &Sender<Request>) -> Response {
+    let path = req.path.as_str();
+    let (get, post) = (req.method == "GET", req.method == "POST");
+    if !host_ok(&req.host, shared.address.as_deref()) {
+        return text(403, "Forbidden");
+    }
+    if get && (path == "/icon.png" || path == "/favicon.ico" || path == "/apple-touch-icon.png") {
+        // The icon needs no PIN: browsers fetch it without the page's query.
+        return respond(200, "image/png", crate::ICON_PNG.to_vec()).with_header("Cache-Control", "max-age=86400");
+    }
+    if let Some(refusal) = check_pin(shared, query_value(&req.query, "pin")) {
+        return refusal;
+    }
+    let has_header = req.has_command_header;
+    let query = req.query.as_str();
+    match path {
+        "/" if get => page(),
+        "/api/status" if get => status(shared),
+        "/api/wheel.png" if get => wheel_image(shared),
+        "/api/procs" if get => procs(),
+        // Ended here, not on the menu thread (taskkill takes a moment). A
+        // game Rusty Popper started then ends as if it had exited.
+        "/api/kill" if post && !has_header => text(403, "Missing header"),
+        "/api/kill" if post => match kill_target(query) {
+            Some(target) => kill(target),
+            None => text(400, "Bad process"),
+        },
+        p if post && p.starts_with("/api/") => match command_of(p, query) {
+            None => text(404, "Not found"),
+            Some(_) if !has_header => text(403, "Missing header"),
+            Some(cmd) => run_command(cmd, tx),
+        },
+        _ => text(404, "Not found"),
+    }
+}
+
+/// None if the PIN (if one is set) is right; otherwise the refusal. Wrong
+/// PINs count towards the lockout; a missing one (an old bookmark) doesn't.
+fn check_pin(shared: &Shared, given: Option<&str>) -> Option<Response> {
+    let pin = shared.pin.as_deref()?;
+    let mut guard = shared.pin_guard.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if guard.locked_until.is_some_and(|t| now < t) {
+        return Some(text(429, "Too many wrong PINs: try again later"));
+    }
+    if guard.last_wrong.is_some_and(|t| now.duration_since(t) >= PIN_FORGET) {
+        *guard = PinGuard::default();
+    }
+    match given {
+        Some(g) if g == pin => None,
+        Some(_) => {
+            guard.wrong += 1;
+            guard.last_wrong = Some(now);
+            if guard.wrong >= PIN_TRIES {
+                let lockout = PIN_LOCKOUT.saturating_mul(1 << guard.lockouts.min(6)).min(PIN_LOCKOUT_MAX);
+                log::warn!("Phone remote: {} wrong PINs; refusing requests for {} s", guard.wrong, lockout.as_secs());
+                guard.wrong = 0;
+                guard.lockouts += 1;
+                guard.locked_until = Some(now + lockout);
+            }
+            Some(text(403, "Wrong PIN: scan the QR code on the cabinet again"))
+        }
+        None => Some(text(403, "Missing PIN: scan the QR code on the cabinet again")),
+    }
+}
+
+/// An answer: status, body and headers. Every answer closes the connection.
+struct Response {
+    code: u16,
+    body: Vec<u8>,
+    headers: Vec<(&'static str, String)>,
+}
+
+impl Response {
+    fn with_header(mut self, name: &'static str, value: &str) -> Response {
+        self.headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        self.headers.push((name, value.to_string()));
+        self
+    }
+
+    fn write_to(&self, out: &mut impl Write) -> std::io::Result<()> {
+        let mut head = format!("HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n", self.code, reason(self.code), self.body.len());
+        for (name, value) in &self.headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str("\r\n");
+        out.write_all(head.as_bytes())?;
+        out.write_all(&self.body)
+    }
+}
+
+fn reason(code: u16) -> &'static str {
+    match code {
+        200 => "OK",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        409 => "Conflict",
+        413 => "Content Too Large",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        503 => "Service Unavailable",
+        _ => "Unknown",
+    }
 }
 
 fn respond(code: u16, content_type: &str, body: Vec<u8>) -> Response {
-    tiny_http::Response::from_data(body)
-        .with_status_code(code)
-        .with_header(header("Content-Type", content_type))
-        .with_header(header("Cache-Control", "no-store"))
-        .with_header(header("X-Content-Type-Options", "nosniff"))
+    Response { code, body, headers: Vec::new() }
+        .with_header("Content-Type", content_type)
+        .with_header("Cache-Control", "no-store")
+        .with_header("X-Content-Type-Options", "nosniff")
+        // The PIN is in the page's address: never pass it on, and never let
+        // another site's page show this one inside a frame.
+        .with_header("Referrer-Policy", "no-referrer")
+        .with_header("X-Frame-Options", "DENY")
 }
 
 fn text(code: u16, body: &str) -> Response {
@@ -352,7 +564,7 @@ fn text(code: u16, body: &str) -> Response {
 
 fn page() -> Response {
     respond(200, "text/html; charset=utf-8", PAGE.as_bytes().to_vec())
-        .with_header(header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'"))
+        .with_header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'")
 }
 
 fn status(shared: &Shared) -> Response {
@@ -735,6 +947,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_requests_and_refuses_bodies() {
+        let parse = |raw: &str| read_request(&mut raw.as_bytes());
+        let r = parse("POST /api/set?pin=1&key=volume&value=40 HTTP/1.1\r\nHost: 10.0.0.2:8642\r\nx-rusty-popper: 1\r\nContent-Length: 0\r\n\r\n").unwrap();
+        assert_eq!((r.method.as_str(), r.path.as_str(), r.query.as_str(), r.host.as_str(), r.has_command_header), ("POST", "/api/set", "pin=1&key=volume&value=40", "10.0.0.2:8642", true));
+        assert_eq!(parse("POST / HTTP/1.1\r\nContent-Length: 5000000000\r\n\r\n").unwrap_err(), BadRequest::Status(413, "No request body accepted"));
+        assert_eq!(parse("POST / HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n").unwrap_err(), BadRequest::Status(413, "No request body accepted"));
+        assert_eq!(parse("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap_err(), BadRequest::Status(413, "No request body accepted"));
+        assert_eq!(parse("GET / HTTP/1.1\r\nHost: x").unwrap_err(), BadRequest::Gone, "cut short");
+        assert_eq!(parse("GET /\r\n\r\n").unwrap_err(), BadRequest::Status(400, "Bad request"));
+        assert_eq!(parse("GET http://evil/ HTTP/1.1\r\n\r\n").unwrap_err(), BadRequest::Status(400, "Bad request"));
+        let huge = format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(MAX_HEAD));
+        assert_eq!(parse(&huge).unwrap_err(), BadRequest::Status(431, "Request too large"));
+    }
+
+    #[test]
+    fn bad_pin_is_refused_before_binding() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let err = Remote::start(port, Some("12 34".into()), None, Duration::ZERO).err().expect("refused");
+        assert!(err.to_string().contains("PIN"), "{err:#}");
+    }
+
+    #[test]
     fn serves_status_and_takes_commands() {
         use std::io::{Read, Write};
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
@@ -770,5 +1005,46 @@ mod tests {
         let r = get("POST /api/restart?pin=9 HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Rusty-Popper: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         answer.join().unwrap();
         assert!(r.starts_with("HTTP/1.1 409") && r.ends_with("busy"), "{r}");
+    }
+
+    #[test]
+    fn hostile_clients_cant_hang_or_crash_it() {
+        use std::io::{Read, Write};
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let remote = Remote::start(port, Some("42".into()), Some("127.0.0.1".into()), Duration::ZERO).unwrap();
+        let get = |req: &str| {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            s.write_all(req.as_bytes()).unwrap();
+            let mut out = String::new();
+            let _ = s.read_to_string(&mut out);
+            out
+        };
+        // A huge announced body is refused at once, unread.
+        let big = get("POST /api/exit?pin=42 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2000000000\r\n\r\n");
+        assert!(big.starts_with("HTTP/1.1 413"), "{big}");
+        // A client that connects and sends nothing doesn't hold up others.
+        let _stalled = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let ok = get("GET /api/status?pin=42 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+        // Wrong PINs lock everyone out for a while, the right one too.
+        for _ in 0..PIN_TRIES {
+            assert!(get("GET /api/status?pin=0 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").starts_with("HTTP/1.1 403"));
+        }
+        let locked = get("GET /api/status?pin=42 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(locked.starts_with("HTTP/1.1 429"), "{locked}");
+        // Stopping is quick even with the stalled client, and frees the port.
+        let t = std::time::Instant::now();
+        drop(remote);
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        std::net::TcpListener::bind(("0.0.0.0", port)).expect("port free after stop");
+    }
+
+    #[test]
+    fn page_cant_be_framed() {
+        let mut out = Vec::new();
+        page().write_to(&mut out).unwrap();
+        let head = String::from_utf8_lossy(&out);
+        assert!(head.contains("frame-ancestors 'none'") && head.contains("X-Frame-Options: DENY") && head.contains("Referrer-Policy: no-referrer"), "{head}");
+        assert!(head.contains(&format!("Content-Length: {}", PAGE.len())));
     }
 }

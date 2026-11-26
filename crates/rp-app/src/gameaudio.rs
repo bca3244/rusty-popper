@@ -52,12 +52,21 @@ impl GameAudio {
     /// Called every frame with the item the wheel is on (None: nothing should
     /// play, e.g. a game is running) and a way to find that item's audio.
     pub fn tick(&mut self, selected: Option<usize>, audio_of: impl FnOnce(usize) -> Option<PathBuf>) {
+        // Nothing else reads this player's events. mpv keeps at most 1000 per
+        // client and refuses async commands once that queue is full.
+        if let Some(p) = &self.player {
+            p.poll_events();
+        }
         let selected = selected.filter(|_| self.enabled && self.volume > 0);
         if self.want.map(|(i, _)| i) != selected {
             self.stop();
             self.want = selected.map(|i| (i, Instant::now()));
             self.tried = false;
             return;
+        }
+        if self.playing && !self.tried {
+            // An earlier stop failed; nothing should be playing yet.
+            self.stop();
         }
         let Some((item, since)) = self.want else { return };
         if self.tried || since.elapsed() < DWELL {
@@ -73,11 +82,16 @@ impl GameAudio {
     }
 
     fn stop(&mut self) {
-        if self.playing {
-            self.playing = false;
-            if let Some(p) = &self.player {
-                let _ = p.show(None);
-            }
+        if !self.playing {
+            return;
+        }
+        match &self.player {
+            // Stay "playing" if the stop didn't go through, so the next call retries it.
+            Some(p) => match p.show(None) {
+                Ok(_) => self.playing = false,
+                Err(e) => log::warn!("Game audio stop: {e:#}"),
+            },
+            None => self.playing = false,
         }
     }
 
@@ -93,6 +107,7 @@ impl GameAudio {
         self.enabled = on;
         self.stop();
         self.want = None;
+        self.tried = false;
     }
 }
 

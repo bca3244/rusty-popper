@@ -367,7 +367,9 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     use toml_edit::{value, DocumentMut, Item, Table};
     let mut doc: DocumentMut = text.parse()?;
     let mut set = |table: &str, key: &str, val: toml_edit::Value| {
-        if !doc.contains_table(table) {
+        // A table may also be written inline (`remote = { pin = "1234" }`):
+        // keep it, only add one if there's none.
+        if !doc.get(table).is_some_and(|t| t.is_table_like()) {
             doc.insert(table, Item::Table(Table::new()));
         }
         doc[table][key] = value(val);
@@ -386,9 +388,6 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     Ok(doc.to_string())
 }
 
-/// Writes the editable values into rusty-popper.toml. The new contents go to
-/// a temp file that then replaces the old one, so a power cut mid-save can't
-/// leave a half-written settings file.
 /// The file's text, or empty if there's no file yet. Any other read error is
 /// passed on, so a file we can't read is never overwritten.
 fn read_existing(path: &Path) -> anyhow::Result<String> {
@@ -399,6 +398,9 @@ fn read_existing(path: &Path) -> anyhow::Result<String> {
     }
 }
 
+/// Writes the editable values into rusty-popper.toml. The new contents go to
+/// a temp file that then replaces the old one, so a power cut mid-save can't
+/// leave a half-written settings file.
 pub fn save(path: &Path, v: &Editable) -> anyhow::Result<()> {
     let text = read_existing(path)?;
     let new = updated(&text, v)?;
@@ -472,6 +474,28 @@ mod tests {
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
         assert!(s.dof.enabled);
         assert!(s.remote.enabled);
+    }
+
+    #[test]
+    fn save_keeps_inline_tables() {
+        let before = "remote = { enabled = false, pin = '1234', port = 9000 }\nsound = { volume = 10 }\n";
+        let v = Editable {
+            style: WheelStyle::Arc,
+            attract_enabled: true,
+            attract_idle_secs: 180,
+            attract_interval_secs: 12,
+            volume: 50,
+            sound_enabled: true,
+            sound_volume: 30,
+            game_audio: true,
+            game_audio_volume: 50,
+            dof: false,
+            remote: true,
+        };
+        let s = Settings::parse(&updated(before, &v).unwrap()).unwrap();
+        assert!(s.remote.enabled);
+        assert_eq!((s.remote.pin.as_deref(), s.remote.port), (Some("1234"), 9000));
+        assert_eq!(s.sound.volume, 30);
     }
 
     #[test]

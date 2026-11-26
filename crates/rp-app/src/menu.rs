@@ -131,23 +131,12 @@ impl App {
 
     /// The Options row for updates, describing where things stand.
     pub(crate) fn update_label(&self) -> String {
-        use updater::Status::*;
-        let current = env!("CARGO_PKG_VERSION");
-        match self.updater.status() {
-            Off => format!("Check for updates (v{current})"),
-            Checking => "Checking for updates…".into(),
-            UpToDate => format!("No new updates (v{current})"),
-            Available(r) => format!("Install update v{}", r.version),
-            Downloading { version, percent } => format!("Downloading v{version}… {percent}%"),
-            Staged { version, .. } => format!("Installing v{version}…"),
-            Restarting(version) => format!("Restarting into v{version}…"),
-            Failed(why) => format!("Update failed: {}", why.chars().take(40).collect::<String>()),
-        }
+        update_label_for(&self.updater.status())
     }
 
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
-        vec![
+        let labels = vec![
             format!("Wheel style: {}", self.style.label()),
             "Attract mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
@@ -160,7 +149,9 @@ impl App {
             },
             self.update_label(),
             "Back".to_string(),
-        ]
+        ];
+        debug_assert_eq!(labels.len(), OPTION_ROWS);
+        labels
     }
 
     /// Labels for Options → Attract mode, with current values.
@@ -191,17 +182,17 @@ impl App {
     /// Cycles the value on Options row `row`, applies it, and saves it.
     pub(crate) fn change_option(&mut self, row: usize) {
         match row {
-            0 => self.style = self.style.toggled(),
-            3 => {
+            STYLE_ROW => self.style = self.style.toggled(),
+            DOF_ROW => {
                 let on = !self.dof.enabled;
                 self.dof.set_enabled(on);
                 self.dof_shown = None;
             }
-            4 => {
+            REMOTE_ROW => {
                 let on = !self.remote_cfg.enabled;
                 self.set_remote(on, Duration::ZERO);
             }
-            5 => {
+            UPDATE_ROW => {
                 match self.updater.status() {
                     updater::Status::Available(rel) => self.updater.download(rel),
                     updater::Status::Downloading { .. } | updater::Status::Staged { .. } | updater::Status::Restarting(_) | updater::Status::Checking => {}
@@ -229,7 +220,7 @@ impl App {
     pub(crate) fn change_sound(&mut self, row: usize) {
         match row {
             0 => {
-                self.volume = if self.volume >= 100 { 0 } else { (self.volume / 10 + 1) * 10 };
+                self.volume = next_volume(self.volume);
                 if let Some(g) = &self.gfx {
                     let _ = g.outs[0].player.command(&["set", "volume", &self.volume.to_string()]);
                 }
@@ -237,12 +228,10 @@ impl App {
             1 => self.sounds.enabled = !self.sounds.enabled,
             3 => self.game_audio.set_enabled(!self.game_audio.enabled),
             4 => {
-                let v = if self.game_audio.volume >= 100 { 0 } else { (self.game_audio.volume / 10 + 1) * 10 };
-                self.game_audio.set_volume(v);
+                self.game_audio.set_volume(next_volume(self.game_audio.volume));
             }
             2 => {
-                let v = if self.sounds.volume >= 100 { 0 } else { (self.sounds.volume / 10 + 1) * 10 };
-                self.sounds.set_volume(v);
+                self.sounds.set_volume(next_volume(self.sounds.volume));
             }
             _ => return,
         }
@@ -252,6 +241,8 @@ impl App {
     /// The Options settings, for the phone remote's Settings card.
     pub(crate) fn settings_view(&self) -> remote::SettingsView {
         use updater::Status::*;
+        // Read once, so the label, state and button can't disagree.
+        let status = self.updater.status();
         remote::SettingsView {
             style: self.style.key(),
             attract: self.attract.enabled,
@@ -265,8 +256,8 @@ impl App {
             game_audio: self.game_audio.enabled,
             game_audio_volume: self.game_audio.volume,
             dof: self.dof.enabled,
-            update: self.update_label(),
-            update_state: match self.updater.status() {
+            update: update_label_for(&status),
+            update_state: match &status {
                 Off => "idle",
                 Checking => "checking",
                 UpToDate => "none",
@@ -274,7 +265,7 @@ impl App {
                 Downloading { .. } | Staged { .. } | Restarting(_) => "busy",
                 Failed(_) => "failed",
             },
-            update_action: match self.updater.status() {
+            update_action: match &status {
                 Available(_) => "install",
                 Checking | Downloading { .. } | Staged { .. } | Restarting(_) => "",
                 _ => "check",
@@ -551,5 +542,30 @@ impl App {
             target = (target + 1) % games;
         }
         g.wheel.step(library::shortest_steps(cur, target, self.view.len()));
+    }
+}
+
+/// The Options row for updates, describing where `status` stands.
+fn update_label_for(status: &updater::Status) -> String {
+    use updater::Status::*;
+    let current = env!("CARGO_PKG_VERSION");
+    match status {
+        Off => format!("Check for updates (v{current})"),
+        Checking => "Checking for updates…".into(),
+        UpToDate => format!("No new updates (v{current})"),
+        Available(r) => format!("Install update v{}", r.version),
+        Downloading { version, percent } => format!("Downloading v{version}… {percent}%"),
+        Staged { version, .. } => format!("Installing v{version}…"),
+        Restarting(version) => format!("Restarting into v{version}…"),
+        Failed(why) => format!("Update failed: {}", why.chars().take(40).collect::<String>()),
+    }
+}
+
+/// The next step of a volume that Options cycles in 10s (100 wraps to 0).
+fn next_volume(v: i32) -> i32 {
+    if v >= 100 {
+        0
+    } else {
+        (v / 10 + 1) * 10
     }
 }
