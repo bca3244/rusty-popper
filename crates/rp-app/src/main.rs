@@ -349,6 +349,7 @@ fn run() -> Result<()> {
         screens,
         card_screens,
         card: None,
+        notice: None,
         updater: updater::Updater::new(settings.update.check, &settings.update.repo, &exe_dir()),
         update_confirmed: false,
         sounds: sfx::Sounds::load(
@@ -616,6 +617,9 @@ impl Gfx {
 
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
+/// A second Exit press this long after the first force-closes the game.
+const FORCE_AFTER: Duration = Duration::from_millis(500);
+
 const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "Restart cabinet", "Shut down cabinet"];
 
 /// Choices the Options screen cycles through with Start.
@@ -679,6 +683,8 @@ struct Playing {
     /// A screen the emulator keeps is showing a video, so it needs real frame rates.
     kept_video: bool,
     logos_released: bool,
+    /// When the Exit button first asked the game to close.
+    stop_pressed: Option<Instant>,
     last_render: Option<Instant>,
 }
 
@@ -716,6 +722,8 @@ struct App {
     card_screens: (Option<Screen>, Option<Screen>),
     /// The info / help card being shown.
     card: Option<overlay::Card>,
+    /// A short message over the wheel ("Couldn't start ...") and when it appeared.
+    notice: Option<(String, Instant)>,
     sounds: sfx::Sounds,
     updater: updater::Updater,
     /// Whether a fresh update has been confirmed as working (or there was none).
@@ -799,11 +807,6 @@ struct App {
     /// A restart (`/r`) or shutdown (`/s`) from the phone, waiting for the
     /// game to close, and when it was asked for.
     pending_power: Option<(&'static str, Instant)>,
-}
-
-/// The file next to the exe that remembers the last playlist.
-fn state_path() -> PathBuf {
-    exe_dir().join("last-playlist.txt")
 }
 
 /// The app icon as a PNG (also the phone remote's page icon).

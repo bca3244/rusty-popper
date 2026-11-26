@@ -90,6 +90,9 @@ pub enum Phase {
 pub struct Control {
     phase: AtomicU8,
     stop: AtomicBool,
+    /// A second close request: end the game's processes now, without
+    /// waiting out the close script's grace period.
+    force: AtomicBool,
     /// Process ids of the game, as last seen.
     pids: Mutex<Vec<u32>>,
 }
@@ -125,6 +128,17 @@ impl Control {
 
     pub fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Asks the worker to end the game's processes at once (Exit pressed
+    /// again while a close is under way). Implies a close request.
+    pub fn request_force(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.force.store(true, Ordering::Relaxed);
+    }
+
+    pub fn force_requested(&self) -> bool {
+        self.force.load(Ordering::Relaxed)
     }
 }
 
@@ -635,7 +649,11 @@ impl LaunchJob {
             }
             if let Some(at) = stop_at {
                 let limit = if has_post { KILL_AFTER } else { KILL_AFTER_NO_SCRIPT };
-                if killed_at.is_none() && at.elapsed() >= limit {
+                let forced = ctl.force_requested();
+                if killed_at.is_none() && (forced || at.elapsed() >= limit) {
+                    if forced {
+                        log::info!("Force close requested; ending the game's processes");
+                    }
                     killed_at = Some(Instant::now());
                     tracker.kill_all();
                 }
@@ -828,6 +846,9 @@ mod tests {
         assert!(!c.stop_requested());
         c.request_stop();
         assert!(c.stop_requested());
+        assert!(!c.force_requested());
+        c.request_force();
+        assert!(c.force_requested() && c.stop_requested());
         assert!(c.game_pids().is_empty());
         c.set_pids(&[Pid::from_u32(42)]);
         assert_eq!(c.game_pids(), [42]);

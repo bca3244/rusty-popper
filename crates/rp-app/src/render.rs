@@ -10,15 +10,12 @@ impl App {
 
     pub(crate) fn init(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let init_start = Instant::now();
-        // Start in the last playlist used (if it still exists), on the --game
-        // match or that playlist's first game.
-        let last = std::fs::read_to_string(state_path()).unwrap_or_default();
-        self.playlist = self.lib.playlist_named(last.trim());
-        self.view = self.lib.view(self.playlist).to_vec();
-        if !self.lib.has_games(self.playlist) || (self.start != 0 && !self.view.contains(&self.start)) {
-            self.playlist = 0;
-            self.view = self.lib.view(0).to_vec();
-        }
+        // Always start in All games, on its first game (A-Z) or the --game
+        // match. Nothing about the last session is remembered; the file that
+        // used to remember the playlist goes.
+        let _ = std::fs::remove_file(exe_dir().join("last-playlist.txt"));
+        self.playlist = 0;
+        self.view = self.lib.view(0).to_vec();
         let start_pos = self.view.iter().position(|&i| i == self.start).unwrap_or(0);
         self.start = self.view[start_pos];
         log::info!("Menu rotation: {} deg", self.ui_rotation());
@@ -255,9 +252,12 @@ impl App {
             }
         }
         self.poll_card();
-        // The "no card" notice closes by itself.
+        // The "no card" notice closes by itself, and so does a notice.
         if self.card.as_ref().is_some_and(|c| c.expired()) {
             self.close_card();
+        }
+        if self.notice.as_ref().is_some_and(|(_, at)| at.elapsed().as_secs_f32() > overlay::NOTICE_SECS) {
+            self.notice = None;
         }
         let style = self.style;
         let option_labels = match self.menu.as_ref().map(|m| m.kind) {
@@ -269,7 +269,7 @@ impl App {
         let ui_rotation = self.ui_rotation();
         // Menu, letter and card animations all finish within a second of the
         // button press (or the card's picture arriving) that started them.
-        let animating = self.last_input.elapsed() < STILL_AFTER || self.card.as_ref().is_some_and(|c| c.opened.elapsed() < STILL_AFTER);
+        let animating = self.last_input.elapsed() < STILL_AFTER || self.card.as_ref().is_some_and(|c| c.opened.elapsed() < STILL_AFTER) || self.notice.is_some();
         let Some(g) = self.gfx.as_mut() else { return Ok(()) };
 
         let now_i = Instant::now();
@@ -490,6 +490,9 @@ impl App {
         }
         if let Some(card) = self.card.as_ref().filter(|c| c.out == 0) {
             overlay::draw(&mut g.canvas, lw, lh, card, &g.fonts);
+        }
+        if let Some((text, at)) = &self.notice {
+            overlay::draw_notice(&mut g.canvas, lw, lh, text, at.elapsed().as_secs_f32(), &g.fonts);
         }
         g.canvas.restore();
         g.canvas.flush();

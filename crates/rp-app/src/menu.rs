@@ -22,9 +22,7 @@ impl App {
                 }
             }
         }
-        let name = self.lib.playlist_name(self.playlist).to_string();
-        log::info!("Playlist: {name} ({} entries)", self.view.len());
-        let _ = std::fs::write(state_path(), name);
+        log::info!("Playlist: {} ({} entries)", self.lib.playlist_name(self.playlist), self.view.len());
     }
 
     /// Moves to the first game of the next (`dir` > 0) or previous letter
