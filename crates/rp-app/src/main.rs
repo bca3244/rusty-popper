@@ -615,11 +615,12 @@ impl Gfx {
     }
 }
 
+/// A second Exit press this long after the first force-closes the game
+/// (sooner, a table may still be saving as it closes normally).
+const FORCE_AFTER: Duration = Duration::from_secs(3);
+
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
-/// A second Exit press this long after the first force-closes the game.
-const FORCE_AFTER: Duration = Duration::from_millis(500);
-
 const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "Restart cabinet", "Shut down cabinet"];
 
 /// Choices the Options screen cycles through with Start.

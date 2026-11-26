@@ -31,7 +31,11 @@ impl App {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("The game thread ended without a result");
+                let (index, closing) = (p.index, p.ctl.stop_requested());
                 self.return_from_game(el, true);
+                if !closing {
+                    self.launch_failed(index);
+                }
                 return Ok(());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -103,7 +107,7 @@ impl App {
                     }
                     // Pressed again (a moment later, so not a bounce): the
                     // table is stuck, end it now.
-                    stopped if !p.ctl.force_requested() && stopped.is_none_or(|t| t.elapsed() >= FORCE_AFTER) => {
+                    Some(t) if !p.ctl.force_requested() && t.elapsed() >= FORCE_AFTER => {
                         log::info!("Exit button pressed again: force-closing the game");
                         p.ctl.request_force();
                     }

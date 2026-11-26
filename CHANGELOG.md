@@ -5,7 +5,7 @@ All notable changes to Rusty Popper. Versions follow the GitHub [releases](https
 ## [0.2.42] - 2026-11-26
 
 ### Added
-- **Press Exit again to force-close a stuck table.** The first press closes the game with its close script as before; a second press (half a second or more later) ends the game's processes straight away instead of waiting out the 20-second grace period.
+- **Press Exit again to force-close a stuck table.** The first press closes the game with its close script as before; a second press (3 seconds or more later) ends the game's processes straight away instead of waiting out the 20-second grace period.
 - **"Couldn't start <game>"** shows over the wheel for a few seconds when a game doesn't start, instead of a silent return to the wheel.
 
 ### Changed

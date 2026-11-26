@@ -414,10 +414,11 @@ impl App {
         // While a game is loading or running the menu isn't on screen, so
         // nothing may act on it. The exit key closes the game instead (it
         // only reaches us if the game never took the keyboard focus).
-        if let Some(p) = &self.playing {
+        if let Some(p) = self.playing.as_mut() {
             if action == Menu && !p.ctl.stop_requested() {
                 log::info!("Exit pressed: closing the game");
                 p.ctl.request_stop();
+                p.stop_pressed = Some(Instant::now());
             }
             return;
         }

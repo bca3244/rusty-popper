@@ -186,8 +186,14 @@ impl Script {
 
     /// Waits for the script, but no longer than `limit`: after that it is
     /// ended, with whatever it started.
-    fn wait_up_to(&mut self, limit: Duration) {
+    /// Waits for the script, ending it after `limit` or once `cancel` says so.
+    fn wait_up_to(&mut self, limit: Duration, cancel: impl Fn() -> bool) {
         while !self.finished() {
+            if cancel() {
+                log::info!("{} script cut short (force close)", self.label);
+                self.end();
+                return;
+            }
             if self.started.elapsed() >= limit {
                 log::warn!("{} script still running after {}s; ending it", self.label, limit.as_secs());
                 self.end();
@@ -569,9 +575,10 @@ impl LaunchJob {
     }
 
     /// Runs the post (close) script and waits for it.
-    fn run_post_script(&self) {
+    /// Runs the close script; a force close (`ctl`) cuts it short.
+    fn run_post_script(&self, ctl: &Control) {
         match self.start_script("post", &self.emulator.post_script) {
-            Ok(Some(mut s)) => s.wait_up_to(POST_SCRIPT_LIMIT),
+            Ok(Some(mut s)) => s.wait_up_to(POST_SCRIPT_LIMIT, || ctl.force_requested()),
             Ok(None) => {}
             Err(e) => log::warn!("{e:#}"),
         }
@@ -593,7 +600,7 @@ impl LaunchJob {
         ctl.set(Phase::Exiting);
         log::info!("Game {outcome:?}");
         if !post_ran {
-            self.run_post_script();
+            self.run_post_script(ctl);
         }
         // Tidy up the launch script's temp file if it has finished by now.
         if let Some(s) = script.as_mut() {
@@ -645,7 +652,7 @@ impl LaunchJob {
                 log::info!("Close requested; running post script");
                 stop_at = Some(Instant::now());
                 ctl.set(Phase::Exiting);
-                self.run_post_script();
+                self.run_post_script(ctl);
             }
             if let Some(at) = stop_at {
                 let limit = if has_post { KILL_AFTER } else { KILL_AFTER_NO_SCRIPT };
@@ -691,7 +698,7 @@ impl LaunchJob {
     fn close_while_loading(&self, script: &mut Option<Script>, tracker: &mut Tracker, ctl: &Control, start: Instant) -> Outcome {
         log::info!("Close requested while loading; running post script");
         ctl.set(Phase::Exiting);
-        self.run_post_script();
+        self.run_post_script(ctl);
         // A launch script still running after this long was being shown as the game.
         let blocking = script.as_mut().is_some_and(|s| !s.finished()) && start.elapsed() >= BLOCKING_SCRIPT;
         if let Some(s) = script.as_mut() {

@@ -69,7 +69,13 @@ pub const NOTICE_SECS: f32 = 4.0;
 /// frame, fading in and out. `t` is seconds since it appeared.
 pub fn draw_notice(cv: &mut Canvas<OpenGl>, w: f32, h: f32, text: &str, t: f32, fonts: &Fonts) {
     let a = (t / 0.2).min(1.0).min(((NOTICE_SECS - t) / 0.4).clamp(0.0, 1.0));
-    let size = (w.min(h) * 0.045).max(22.0);
+    let mut size = (w.min(h) * 0.045).max(22.0);
+    // A long game title shrinks to fit the width.
+    let probe = Paint::color(Color::white()).with_font(&[fonts.display]).with_font_size(size);
+    let tw = cv.measure_text(0.0, 0.0, text, &probe).map(|m| m.width()).unwrap_or(0.0);
+    if tw > w * 0.92 {
+        size *= w * 0.92 / tw;
+    }
     let band = size * 2.6;
     let mut p = Path::new();
     p.rect(0.0, (h - band) / 2.0, w, band);
