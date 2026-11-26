@@ -163,6 +163,7 @@ impl App {
                 LayoutRow::Size => format!("Wheel Size: {}%", l.size),
                 LayoutRow::Position => format!("Position: {}", l.position.label()),
                 LayoutRow::SideWheels => format!("Wheels Each Side: {}", l.side_wheels),
+                LayoutRow::Spacing => format!("Wheel Spacing: {}%", l.spacing),
                 LayoutRow::Arc => format!("Arc: {}", if l.arc { "On" } else { "Off" }),
                 LayoutRow::Reset => "Reset to Template".to_string(),
                 LayoutRow::Back => "Back".to_string(),
@@ -187,6 +188,10 @@ impl App {
             }
             LayoutRow::Position => l.position = l.position.toggled(),
             LayoutRow::SideWheels => l.side_wheels = if l.side_wheels >= settings::MAX_SIDE_WHEELS { 0 } else { l.side_wheels + 1 },
+            LayoutRow::Spacing => {
+                let i = settings::SPACING_CHOICES.iter().position(|&c| c > l.spacing).unwrap_or(0);
+                l.spacing = settings::SPACING_CHOICES[i];
+            }
             LayoutRow::Arc => l.arc = !l.arc,
             LayoutRow::Reset => self.layout = self.style.template(),
             LayoutRow::Back => return,
@@ -351,6 +356,8 @@ impl App {
             position: self.layout.position.key(),
             side_wheels: self.layout.side_wheels,
             max_side_wheels: settings::MAX_SIDE_WHEELS,
+            spacing: self.layout.spacing,
+            spacing_choices: settings::SPACING_CHOICES,
             arc: self.layout.arc,
             layout_changed: self.layout != self.style.template(),
             attract: self.attract.enabled,
@@ -402,6 +409,7 @@ impl App {
             "size" => self.layout.size = value.parse::<u32>().ok().filter(|v| settings::SIZE_CHOICES.contains(v)).ok_or_else(bad)?,
             "position" => self.layout.position = WheelPosition::parse(value).ok_or_else(bad)?,
             "side_wheels" => self.layout.side_wheels = value.parse::<u32>().ok().filter(|v| *v <= settings::MAX_SIDE_WHEELS).ok_or_else(bad)?,
+            "spacing" => self.layout.spacing = value.parse::<u32>().ok().filter(|v| settings::SPACING_CHOICES.contains(v)).ok_or_else(bad)?,
             "arc" => self.layout.arc = on()?,
             "layout_reset" => self.layout = self.style.template(),
             "attract" => self.attract.enabled = on()?,

@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.50] - 2026-11-26
+
+### Added
+- **Wheel Spacing** in Options → Layout (and on the phone's Settings page): how far apart the wheels are, from 50% (tight, overlapping) to 200%, in steps. Templates and *Reset to Template* set it back to 100%. Saved as `spacing` under `[wheel]`.
+
 ## [0.2.49] - 2026-11-26
 
 ### Changed

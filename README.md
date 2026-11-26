@@ -69,7 +69,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **Options** (Exit → Options) change things on the spot and save them. A fresh install starts with the arc wheel, attract mode after 3 minutes idle (12 seconds per game), video volume 50, sound effects 30 and game audio 50.
 
-- **Layout ›**, a submenu for how the wheel looks. *Template* picks Arc, Cover Flow, Minimal or Vertical and resets the rest to that template's values (the row says *(Changed)* once you've changed any of them). *Wheel Size* (60% to 150%), *Position* (Bottom, Left or Right), *Wheels Each Side* (0 to 5) and *Arc* (curve the row round a big wheel off the screen edge) can then be changed one by one. *Reset to Template* puts them back. You always get exactly the number of wheels you set; more than fit will overlap or run off the screen edge. W on a keyboard cycles the templates, which resets the layout too.
+- **Layout ›**, a submenu for how the wheel looks. *Template* picks Arc, Cover Flow, Minimal or Vertical and resets the rest to that template's values (the row says *(Changed)* once you've changed any of them). *Wheel Size* (60% to 150%), *Position* (Bottom, Left or Right), *Wheels Each Side* (0 to 5), *Wheel Spacing* (50% to 200%) and *Arc* (curve the row round a big wheel off the screen edge) can then be changed one by one. *Reset to Template* puts them back. You always get exactly the number of wheels you set; more than fit will overlap or run off the screen edge. W on a keyboard cycles the templates, which resets the layout too.
 - **Attract Mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with video sound, sound effects and game audio, each on or off with its own volume (a volume only shows while its sound is on). Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
@@ -106,7 +106,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 
 | Section | What's in it |
 |---|---|
-| `[wheel]` | `style` (the layout template): `"arc"`, `"flow"`, `"minimal"` or `"vertical"`; `size` (60 to 150), `position` (`"bottom"`, `"left"`, `"right"`), `side_wheels` (0 to 5), `arc` (true/false), each defaulting to the template's value |
+| `[wheel]` | `style` (the layout template): `"arc"`, `"flow"`, `"minimal"` or `"vertical"`; `size` (60 to 150), `position` (`"bottom"`, `"left"`, `"right"`), `side_wheels` (0 to 5), `spacing` (50 to 200), `arc` (true/false), each defaulting to the template's value |
 | `[playfield]` | `ui_rotation`: turn the menu to face the player (default: Popper's own setting) |
 | `[input]` | Extra joystick buttons, whether buttons need focus, the Q quit key |
 | `[launch]` | Extra helper programs to ignore when deciding whether a game is still running |

@@ -7,6 +7,7 @@ style = "arc"          # layout template: "arc", "flow", "minimal" or "vertical"
 # size = 80            # main wheel size, percent: 60 to 150 in steps of 10
 # position = "bottom"  # "bottom", "left" or "right"
 # side_wheels = 2      # wheels shown each side of the main one, 0 to 5
+# spacing = 100        # gap between the wheels, percent: 50 to 200
 # arc = true           # curve the row of wheels
 
 [playfield]
