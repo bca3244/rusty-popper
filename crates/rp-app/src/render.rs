@@ -485,7 +485,7 @@ impl App {
                 MenuKind::Attract => "Attract mode",
                 MenuKind::Sound => "Sound",
             };
-            let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
+            let view = wheel::MenuView { title, options: &names, selected: menu.selected.min(names.len().saturating_sub(1)), t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw, lh, &view, &g.fonts);
         }
         if let Some(card) = self.card.as_ref().filter(|c| c.out == 0) {

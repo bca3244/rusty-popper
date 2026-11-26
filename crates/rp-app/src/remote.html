@@ -35,7 +35,8 @@
   h2:first-child { margin-top: 0; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
   .row label { flex: 1; white-space: nowrap; }
-  .row output { min-width: 3.2em; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .row[hidden] { display: none; }
+.row output { min-width: 3.2em; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
   select { background: #222834; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; }
   input[type=range] { flex: 1; min-width: 0; accent-color: var(--copper); }
   input[type=checkbox] { appearance: none; width: 48px; height: 28px; border-radius: 14px; background: #333a48; position: relative; transition: background .15s; flex: none; }
@@ -73,14 +74,14 @@
       </select></div>
     <h2>Attract mode</h2>
     <div class="row"><label for="attract">Attract mode</label><input type="checkbox" id="attract" data-key="attract"></div>
-    <div class="row"><label for="attract_idle">Starts after</label><select id="attract_idle" data-key="attract_idle"></select></div>
-    <div class="row"><label for="attract_interval">Time per game</label><select id="attract_interval" data-key="attract_interval"></select></div>
+    <div class="row" data-needs="attract"><label for="attract_idle">Starts after</label><select id="attract_idle" data-key="attract_idle"></select></div>
+    <div class="row" data-needs="attract"><label for="attract_interval">Time per game</label><select id="attract_interval" data-key="attract_interval"></select></div>
     <h2>Sound</h2>
     <div class="row"><label for="volume">Video volume</label><input type="range" id="volume" data-key="volume" min="0" max="100" step="10"><output for="volume"></output></div>
     <div class="row"><label for="sfx">Sound effects</label><input type="checkbox" id="sfx" data-key="sfx"></div>
-    <div class="row"><label for="sfx_volume">Effects volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
+    <div class="row" data-needs="sfx"><label for="sfx_volume">Effects volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
     <div class="row"><label for="game_audio">Game audio</label><input type="checkbox" id="game_audio" data-key="game_audio"></div>
-    <div class="row"><label for="game_audio_volume">Game audio volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
+    <div class="row" data-needs="game_audio"><label for="game_audio_volume">Game audio volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
     <h2>Cabinet</h2>
     <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
     <h2>Updates</h2>
@@ -138,7 +139,6 @@ function show(s) {
   $("facts").replaceChildren();
   if (g) {
     fact("System", g.emulator);
-    fact("Players", g.players);
     fact("ROM", g.rom);
     fact("File", g.file);
     fact("Tags", g.tags && g.tags.length ? g.tags : null);
@@ -179,6 +179,7 @@ function showSettings(st) {
     const out = document.querySelector('output[for="' + k + '"]');
     if (out) out.textContent = st[k] + "%";
   }
+  showDependents();
   // After a check from this page, "Checking" stays up long enough to read;
   // the status line then says how it went.
   if (checkedAt && st.update_state !== "checking" && Date.now() - checkedAt > 1500) checkedAt = 0;
@@ -187,6 +188,10 @@ function showSettings(st) {
   u.hidden = !st.update_action;
   u.dataset.action = st.update_action;
   u.textContent = st.update_action === "install" ? "Install" : "Check";
+}
+// A setting that only matters while its switch is on hides with it off.
+function showDependents() {
+  for (const row of document.querySelectorAll("[data-needs]")) row.hidden = !$(row.dataset.needs).checked;
 }
 let haveSettings = false, checkedAt = 0;
 function updateText(st) {
@@ -275,7 +280,7 @@ for (const el of document.querySelectorAll("[data-key]")) {
     el.addEventListener("input", () => { touched[k] = Date.now(); document.querySelector('output[for="' + k + '"]').textContent = el.value + "%"; });
     el.addEventListener("change", () => setting(k, el.value));
   } else if (el.type === "checkbox") {
-    el.addEventListener("change", () => setting(k, el.checked ? "on" : "off"));
+    el.addEventListener("change", () => { touched[k] = Date.now(); showDependents(); setting(k, el.checked ? "on" : "off"); });
   } else {
     el.addEventListener("change", () => setting(k, el.value));
   }

@@ -154,29 +154,50 @@ impl App {
         labels
     }
 
-    /// Labels for Options → Attract mode, with current values.
+    /// The rows a menu shows, by their row number in its full list. A
+    /// setting that only matters while its switch is on (e.g. Effects volume
+    /// under Sound effects) is left out while the switch is off. Each switch
+    /// comes before the rows it hides, so flipping it never moves the
+    /// highlight off it.
+    pub(crate) fn menu_rows(&self, kind: MenuKind) -> Vec<usize> {
+        let all = |n: usize| (0..n).collect();
+        match kind {
+            MenuKind::Exit => all(EXIT_MENU.len()),
+            MenuKind::Options => all(OPTION_ROWS),
+            MenuKind::Attract => (0..ATTRACT_ROWS).filter(|&r| self.attract.enabled || !matches!(r, 1 | 2)).collect(),
+            MenuKind::Sound => (0..SOUND_ROWS).filter(|&r| match r {
+                2 => self.sounds.enabled,
+                4 => self.game_audio.enabled,
+                _ => true,
+            }).collect(),
+        }
+    }
+
+    /// Labels for Options → Attract mode, with current values (the rows `menu_rows` shows).
     pub(crate) fn attract_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
         let mins = |s: u64| if s.checked_rem(60) == Some(0) { format!("{} min", s / 60) } else { format!("{s} s") };
-        vec![
+        let all = [
             format!("Attract mode: {}", onoff(self.attract.enabled)),
             format!("Starts after: {}", mins(self.attract.idle_secs)),
             format!("Time per game: {} s", self.attract.interval_secs),
             "Back".to_string(),
-        ]
+        ];
+        self.menu_rows(MenuKind::Attract).into_iter().map(|r| all[r].clone()).collect()
     }
 
-    /// Labels for Options → Sound, with current values.
+    /// Labels for Options → Sound, with current values (the rows `menu_rows` shows).
     pub(crate) fn sound_labels(&self) -> Vec<String> {
         let onoff = |b: bool| if b { "On" } else { "Off" };
-        vec![
+        let all = [
             format!("Video volume: {}%", self.volume),
             format!("Sound effects: {}", onoff(self.sounds.enabled)),
             format!("Effects volume: {}%", self.sounds.volume),
             format!("Game audio: {}", onoff(self.game_audio.enabled)),
             format!("Game audio volume: {}%", self.game_audio.volume),
             "Back".to_string(),
-        ]
+        ];
+        self.menu_rows(MenuKind::Sound).into_iter().map(|r| all[r].clone()).collect()
     }
 
     /// Cycles the value on Options row `row`, applies it, and saves it.
@@ -375,13 +396,12 @@ impl App {
             return;
         }
         // While a menu is open, browsing buttons move its highlight.
-        if let Some(menu) = self.menu.as_mut() {
-            let n = match menu.kind {
-                MenuKind::Exit => EXIT_MENU.len(),
-                MenuKind::Options => OPTION_ROWS,
-                MenuKind::Attract => ATTRACT_ROWS,
-                MenuKind::Sound => SOUND_ROWS,
-            };
+        if let Some(kind) = self.menu.as_ref().map(|m| m.kind) {
+            let rows = self.menu_rows(kind);
+            let n = rows.len();
+            let menu = self.menu.as_mut().unwrap();
+            // The phone remote may have hidden rows meanwhile.
+            menu.selected = menu.selected.min(n - 1);
             match action {
                 Prev | PagePrev | LetterPrev => {
                     menu.selected = (menu.selected + n - 1) % n;
@@ -396,7 +416,7 @@ impl App {
 
                 Quit => el.exit(),
                 Start => {
-                    let (kind, choice) = (menu.kind, menu.selected);
+                    let (kind, choice) = (menu.kind, rows[menu.selected]);
                     self.sounds.play(sfx::Sfx::Select);
                     // Options rows change in place; the menu stays open.
                     match (kind, choice) {
