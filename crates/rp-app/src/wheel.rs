@@ -336,12 +336,17 @@ impl Track {
             let gap = 0.12 * e;
             (0.5 * e * (1.0 + SIDE_SCALE) + gap, e * SIDE_SCALE + gap)
         };
-        let side = layout.side_wheels as f32;
-        // Squeeze the spacing when that many wheels wouldn't fit: the last
-        // one's centre stays on screen (a side row keeps all of it in).
+        let mut side = layout.side_wheels as f32;
+        // When that many wheels won't fit, show fewer (flat logos would pile
+        // up), then squeeze the spacing a little: the last one's centre stays
+        // on screen (a side row keeps all of it in).
         if side >= 1.0 {
-            let last = first + (side - 1.0) * next;
             let room = half - e * SIDE_SCALE * if side_row { 0.5 } else { 0.3 };
+            let mut last = first + (side - 1.0) * next;
+            while !covers && side > 1.0 && room < 0.8 * last {
+                side -= 1.0;
+                last -= next;
+            }
             if last > room {
                 let f = (room / last).max(0.15);
                 first *= f;
@@ -499,8 +504,9 @@ fn draw_track(cv: &mut Cv, t: &Track, f: &Frame) {
             let alpha = clamp(1.3 - a * 0.2, 0.0, 1.0) * fade;
             draw_cover(cv, e, w, h, d, alpha, t.side_row(), reflect, f.fonts);
         } else {
-            let dimmer = if t.plain { 0.55 } else { 0.8 };
-            let alpha = clamp(1.2 - a * 0.2, 0.0, 1.0) * if a < 0.5 { 1.0 } else { dimmer } * fade;
+            // Side wheels are dimmer, Minimal's more so (it keeps the video clear).
+            let dimmer = if t.plain { 0.3 } else { 0.8 };
+            let alpha = clamp(1.2 - a * 0.2, 0.0, 1.0) * (1.0 - (1.0 - dimmer) * a.min(1.0)) * fade;
             draw_logo(cv, e, w, h, alpha, (1.0 - a * 1.6).max(0.0), f.fonts);
         }
         cv.restore();
@@ -857,8 +863,11 @@ mod tests {
                                     // Clear of the title block (portrait) or the counter (landscape).
                                     assert!(t.cy - h / 2.0 >= if vw < dh { 450.0 } else { 160.0 }, "under the title: {what}");
                                     // The last side wheel's centre is on screen.
-                                    let (x, y, _) = t.place(side_wheels as f32);
+                                    let (x, y, _) = t.place(t.side);
                                     assert!((0.0..=vw).contains(&x) && (0.0..=dh).contains(&y), "side wheel off screen: {what}");
+                                    // Flat logos never pile up much.
+                                    let e = if position == WheelPosition::Bottom { t.bw } else { t.bh };
+                                    assert!(style == WheelStyle::Flow || t.side < 1.0 || t.next >= 0.75 * e * SIDE_SCALE, "wheels pile up: {what}");
                                 }
                             }
                         }

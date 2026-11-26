@@ -167,7 +167,7 @@ impl WheelStyle {
     /// The layout this style starts from.
     pub fn template(self) -> Layout {
         let (size, position, side_wheels, arc) = match self {
-            WheelStyle::Arc => (80, WheelPosition::Bottom, 2, true),
+            WheelStyle::Arc => (90, WheelPosition::Bottom, 2, true),
             WheelStyle::Flow => (130, WheelPosition::Bottom, 2, false),
             WheelStyle::Minimal => (120, WheelPosition::Bottom, 1, false),
             WheelStyle::Vertical => (100, WheelPosition::Right, 3, false),
@@ -188,10 +188,31 @@ pub struct WheelSettings {
     /// The layout template.
     #[serde(default)]
     pub style: WheelStyle,
+    // A value that can't be read (a typo, a wrong type) falls back to the
+    // template instead of throwing away the whole settings file.
+    #[serde(default, deserialize_with = "lenient_u32")]
     pub size: Option<u32>,
+    #[serde(default, deserialize_with = "lenient_position")]
     pub position: Option<WheelPosition>,
+    #[serde(default, deserialize_with = "lenient_u32")]
     pub side_wheels: Option<u32>,
+    #[serde(default, deserialize_with = "lenient_bool")]
     pub arc: Option<bool>,
+}
+
+fn lenient_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    let v = toml::Value::deserialize(d)?;
+    Ok(v.as_integer().and_then(|n| u32::try_from(n).ok()))
+}
+
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    let v = toml::Value::deserialize(d)?;
+    Ok(v.as_bool())
+}
+
+fn lenient_position<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<WheelPosition>, D::Error> {
+    let v = toml::Value::deserialize(d)?;
+    Ok(v.as_str().and_then(WheelPosition::parse))
 }
 
 impl WheelSettings {
@@ -488,10 +509,6 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
         doc[table][key] = value(val);
     };
     set("wheel", "style", v.style.key().into());
-    set("wheel", "size", (v.layout.size as i64).into());
-    set("wheel", "position", v.layout.position.key().into());
-    set("wheel", "side_wheels", (v.layout.side_wheels as i64).into());
-    set("wheel", "arc", v.layout.arc.into());
     set("attract", "enabled", v.attract_enabled.into());
     set("attract", "idle_secs", (v.attract_idle_secs as i64).into());
     set("attract", "interval_secs", (v.attract_interval_secs as i64).into());
@@ -503,6 +520,26 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("sound", "game_audio_volume", (v.game_audio_volume as i64).into());
     set("dof", "enabled", v.dof.into());
     set("remote", "enabled", v.remote.into());
+    // Only what differs from the template is written, so changing `style`
+    // by hand still brings that template's whole layout.
+    let t = v.style.template();
+    let l = v.layout;
+    let layout_keys: [(&str, Option<toml_edit::Value>); 4] = [
+        ("size", (l.size != t.size).then(|| (l.size as i64).into())),
+        ("position", (l.position != t.position).then(|| l.position.key().into())),
+        ("side_wheels", (l.side_wheels != t.side_wheels).then(|| (l.side_wheels as i64).into())),
+        ("arc", (l.arc != t.arc).then(|| l.arc.into())),
+    ];
+    for (key, val) in layout_keys {
+        match val {
+            Some(val) => doc["wheel"][key] = value(val),
+            None => {
+                if let Some(w) = doc.get_mut("wheel").and_then(|w| w.as_table_like_mut()) {
+                    w.remove(key);
+                }
+            }
+        }
+    }
     Ok(doc.to_string())
 }
 
@@ -643,8 +680,21 @@ mod tests {
         assert_eq!(s.wheel.layout(), WheelStyle::Vertical.template());
         assert_eq!(s.wheel.layout().position, WheelPosition::Right);
         // Values the file sets win; out-of-range ones are brought into range.
-        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"left\"\nside_wheels = 9\narc = false\n").unwrap();
+        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"Left\"\nside_wheels = 9\narc = false\n").unwrap();
         assert_eq!(s.wheel.layout(), Layout { size: 130, position: WheelPosition::Left, side_wheels: MAX_SIDE_WHEELS, arc: false });
+        // Unreadable values fall back to the template, keeping the rest of the file.
+        let s = Settings::parse("[wheel]\nstyle = \"minimal\"\nsize = -10\nposition = \"up\"\nside_wheels = 1.5\narc = \"on\"\n[dof]\nenabled = true\n").unwrap();
+        assert_eq!(s.wheel.layout(), WheelStyle::Minimal.template());
+        assert!(s.dof.enabled);
+        // Only changes from the template are saved: editing `style` later brings its layout.
+        let mut v = Editable { style: WheelStyle::Arc, layout: WheelStyle::Arc.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
+        let text = updated("[wheel]\nstyle = \"arc\"\nsize = 60\n", &v).unwrap();
+        assert!(!text.contains("size") && !text.contains("position") && !text.contains("arc ="), "{text}");
+        v.layout.position = WheelPosition::Left;
+        let text = updated(&text, &v).unwrap();
+        assert!(text.contains("position = \"left\"") && !text.contains("size"), "{text}");
+        let edited = text.replace("style = \"arc\"", "style = \"vertical\"");
+        assert_eq!(Settings::parse(&edited).unwrap().wheel.layout(), Layout { position: WheelPosition::Left, ..WheelStyle::Vertical.template() });
         for t in [WheelStyle::Arc, WheelStyle::Flow, WheelStyle::Minimal, WheelStyle::Vertical] {
             let l = t.template();
             assert!(SIZE_CHOICES.contains(&l.size) && l.side_wheels <= MAX_SIDE_WHEELS);

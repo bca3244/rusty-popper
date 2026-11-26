@@ -9,7 +9,8 @@ All notable changes to Rusty Popper. Versions follow the GitHub [releases](https
 - Saved under `[wheel]` as `size`, `position`, `side_wheels` and `arc`. An older settings file with only `style` gets that template's layout, so nothing changes until you change it.
 
 ### Changed
-- The four wheel styles are now drawn by one layout engine, so they can be mixed (a cover flow down the left side, a curved vertical list). They look as before, give or take a few pixels in spacing.
+- The four wheel styles are now drawn by one layout engine, so they can be mixed (a cover flow down the left side, a curved vertical list). They look close to before; differences: the Arc template's main wheel is a bit smaller for wide logos and larger for round ones, and on a landscape screen Arc and Cover Flow show 2 wheels each side and Minimal's neighbours sit beside the main logo rather than at the screen edges.
+- W on a keyboard cycles the templates, which now also resets the layout.
 
 ## [0.2.46] - 2026-11-26
 

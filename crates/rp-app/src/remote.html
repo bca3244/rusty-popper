@@ -377,11 +377,15 @@ for (const el of document.querySelectorAll("[data-key]")) {
     el.addEventListener("change", () => setting(k, el.value));
   } else if (el.type === "checkbox") {
     el.addEventListener("change", () => { showChildren(); setting(k, el.checked ? "on" : "off"); });
-  } else {
+  } else if (k !== "style") {
     el.addEventListener("change", () => setting(k, el.value));
   }
 }
-$("layout-reset").addEventListener("click", () => { $("layout-reset").disabled = true; setting("layout_reset", "1").then(poll1); });
+// A template or a reset changes the other layout controls: show the new values at once.
+const LAYOUT_KEYS = ["size", "position", "side_wheels", "arc"];
+function layoutReset(key, value) { for (const k of LAYOUT_KEYS) delete touched[k]; setting(key, value).then(poll1); }
+$("layout-reset").addEventListener("click", () => { $("layout-reset").disabled = true; layoutReset("layout_reset", "1"); });
+$("style").addEventListener("change", () => layoutReset("style", $("style").value));
 $("update").addEventListener("click", () => {
   const install = $("update").dataset.action === "install";
   if (!install) { checkedAt = Date.now(); $("update-status").textContent = "Checking for Updates…"; setTimeout(poll1, 1600); }

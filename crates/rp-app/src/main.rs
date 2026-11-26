@@ -251,8 +251,8 @@ fn run() -> Result<()> {
     }
     let settings = Settings::load(&exe_dir().join("rusty-popper.toml"));
     let style = args.wheel.unwrap_or(settings.wheel.style);
-    // --wheel picks a template, with its own layout.
-    let layout = if args.wheel.is_some() { style.template() } else { settings.wheel.layout() };
+    // --wheel picks a template, with its own layout (the saved one if it's the saved template).
+    let layout = if style == settings.wheel.style { settings.wheel.layout() } else { style.template() };
     let found = discover::find_popper(args.popper.clone(), settings.paths.popper_dir.clone())?;
     let popper = found.dir;
 
