@@ -126,8 +126,6 @@ pub struct GameInfo {
     pub emulator: String,
     pub manufacturer: Option<String>,
     pub year: Option<i64>,
-    pub rom: Option<String>,
-    pub file: String,
     pub tags: Vec<String>,
 }
 
@@ -848,8 +846,6 @@ impl crate::App {
                         emulator: emu.name.clone(),
                         manufacturer: game.manufacturer.clone(),
                         year: game.year,
-                        rom: game.rom.clone(),
-                        file: game.file_name.clone(),
                         tags: game.tags.clone(),
                     }),
                     None,
