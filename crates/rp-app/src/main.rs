@@ -623,7 +623,7 @@ impl Gfx {
 
 /// Exit menu entries. "Back" is first and selected on open so a stray press
 /// of Start never reboots or shuts down the cabinet.
-const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "Restart computer", "Shut down computer"];
+const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "Restart cabinet", "Shut down cabinet"];
 
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];

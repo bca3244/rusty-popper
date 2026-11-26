@@ -65,7 +65,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. Inside a playlist, the **All games** wheel takes you back; it sits one step back from the first game. Rusty Popper remembers the last playlist you used.
 
-**The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart computer* and *Shut down computer*. It always opens on *Back to games*, so a stray press can't power anything off.
+**The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart cabinet* and *Shut down cabinet*. It always opens on *Back to games*, so a stray press can't power anything off.
 
 **Options** (Exit → Options) change things on the spot and save them. A fresh install starts with the arc wheel, attract mode after 3 minutes idle (12 seconds per game), video volume 50, sound effects 30 and game audio 50.
 
