@@ -257,7 +257,7 @@ fn unpack(zip_path: &Path, dir: &Path) -> Result<()> {
 
 /// The arguments this process was started with (minus the restart counter),
 /// so the restarted copy keeps `--popper`, `--mpv` and the like.
-fn passthrough_args() -> Vec<String> {
+pub(crate) fn passthrough_args() -> Vec<String> {
     let mut out = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {

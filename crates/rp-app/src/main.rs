@@ -432,15 +432,7 @@ fn restart_self() {
     }
     let Ok(exe) = std::env::current_exe() else { return };
     // The same arguments, with the restart count replaced.
-    let mut passed: Vec<String> = Vec::new();
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        if a == "--restarted" {
-            args.next();
-        } else {
-            passed.push(a);
-        }
-    }
+    let passed = updater::passthrough_args();
     log::warn!("Restarting the menu (attempt {})", restarted + 1);
     std::thread::sleep(Duration::from_secs(2));
     match std::process::Command::new(exe).args(passed).arg("--restarted").arg((restarted + 1).to_string()).spawn() {
@@ -449,7 +441,6 @@ fn restart_self() {
     }
 }
 
-/// One cabinet screen: its window, GL surface and mpv player.
 /// The menu out of the way of a table another program started.
 struct Aside {
     pid: u32,
@@ -458,6 +449,7 @@ struct Aside {
     visible: Vec<bool>,
 }
 
+/// One cabinet screen: its window, GL surface and mpv player.
 struct ScreenOut {
     screen: Screen,
     window: Window,
@@ -629,9 +621,14 @@ const EXIT_MENU: &[&str] = &["Back to games", "Options", "Exit Rusty Popper", "R
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
 const OPTION_ROWS: usize = 7; // style, attract (submenu), sound (submenu), DOF, phone remote, update, back
-/// The Options rows that open the Attract mode and Sound submenus.
+/// The Options rows, in the order `option_labels` lists them (Back is last).
+const STYLE_ROW: usize = 0;
+/// The rows that open the Attract mode and Sound submenus.
 const ATTRACT_ROW: usize = 1;
 const SOUND_ROW: usize = 2;
+const DOF_ROW: usize = 3;
+const REMOTE_ROW: usize = 4;
+const UPDATE_ROW: usize = 5;
 const ATTRACT_ROWS: usize = 4; // on/off, starts after, time per game, back
 const SOUND_ROWS: usize = 6; // video volume, effects, effects volume, game audio, game audio volume, back
 
@@ -685,8 +682,8 @@ struct ExitMenu {
 fn power(el: &ActiveEventLoop, flag: &str) {
     log::info!("Running shutdown {flag} /t 0");
     use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000; // no console window flashing up
-    if let Err(e) = std::process::Command::new("shutdown").args([flag, "/t", "0"]).creation_flags(CREATE_NO_WINDOW).spawn() {
+    // No console window flashing up.
+    if let Err(e) = std::process::Command::new("shutdown").args([flag, "/t", "0"]).creation_flags(rp_launch::CREATE_NO_WINDOW).spawn() {
         log::error!("shutdown {flag} failed: {e}");
     }
     el.exit();
@@ -786,10 +783,10 @@ fn state_path() -> PathBuf {
     exe_dir().join("last-playlist.txt")
 }
 
-/// The app icon (copper-ring RP wheel) for the windows' title/Alt-Tab icon.
 /// The app icon as a PNG (also the phone remote's page icon).
 pub(crate) static ICON_PNG: &[u8] = include_bytes!("../assets/rusty-popper-256.png");
 
+/// The app icon (copper-ring RP wheel) for the windows' title/Alt-Tab icon.
 fn window_icon() -> Option<winit::window::Icon> {
     // Decoded once and shared by every window.
     static RGBA: OnceLock<Option<(Vec<u8>, u32, u32)>> = OnceLock::new();
