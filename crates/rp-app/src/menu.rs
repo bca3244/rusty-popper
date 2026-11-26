@@ -135,15 +135,15 @@ impl App {
     /// Labels for the Options screen, with current values.
     pub(crate) fn option_labels(&self) -> Vec<String> {
         let labels = vec![
-            format!("Wheel style: {}", self.style.label()),
-            "Attract mode \u{203a}".to_string(),
+            format!("Wheel Style: {}", self.style.label()),
+            "Attract Mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
             format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
             match (&self.remote_error, self.remote.is_some()) {
-                (Some(why), _) => format!("Phone remote: can't start ({why})"),
+                (Some(why), _) => format!("Phone Remote: Can't Start ({why})"),
                 // The address, for typing in when the QR code won't scan.
-                (None, true) => format!("Phone remote: On \u{b7} {}", self.remote.as_ref().map_or(String::new(), |r| remote::short_url(&r.url().0).to_string())),
-                (None, false) => "Phone remote: Off".to_string(),
+                (None, true) => format!("Phone Remote: On \u{b7} {}", self.remote.as_ref().map_or(String::new(), |r| remote::short_url(&r.url().0).to_string())),
+                (None, false) => "Phone Remote: Off".to_string(),
             },
             self.update_label(),
             "Back".to_string(),
@@ -169,9 +169,9 @@ impl App {
         self.attract_rows()
             .into_iter()
             .map(|row| match row {
-                AttractRow::Toggle => format!("Attract mode: {}", onoff(self.attract.enabled)),
-                AttractRow::StartsAfter => format!("Starts after: {}", mins(self.attract.idle_secs)),
-                AttractRow::TimePerGame => format!("Time per game: {} s", self.attract.interval_secs),
+                AttractRow::Toggle => format!("Attract Mode: {}", onoff(self.attract.enabled)),
+                AttractRow::StartsAfter => format!("Starts After: {}", mins(self.attract.idle_secs)),
+                AttractRow::TimePerGame => format!("Time per Game: {} s", self.attract.interval_secs),
                 AttractRow::Back => "Back".to_string(),
             })
             .collect()
@@ -202,12 +202,12 @@ impl App {
         self.sound_rows()
             .into_iter()
             .map(|row| match row {
-                SoundRow::Video => format!("Video sound: {}", onoff(self.video_sound)),
-                SoundRow::VideoVolume => format!("Video volume: {}%", self.volume),
-                SoundRow::Effects => format!("Sound effects: {}", onoff(self.sounds.enabled)),
-                SoundRow::EffectsVolume => format!("Effects volume: {}%", self.sounds.volume),
-                SoundRow::GameAudio => format!("Game audio: {}", onoff(self.game_audio.enabled)),
-                SoundRow::GameAudioVolume => format!("Game audio volume: {}%", self.game_audio.volume),
+                SoundRow::Video => format!("Video Sound: {}", onoff(self.video_sound)),
+                SoundRow::VideoVolume => format!("Video Volume: {}%", self.volume),
+                SoundRow::Effects => format!("Sound Effects: {}", onoff(self.sounds.enabled)),
+                SoundRow::EffectsVolume => format!("Effects Volume: {}%", self.sounds.volume),
+                SoundRow::GameAudio => format!("Game Audio: {}", onoff(self.game_audio.enabled)),
+                SoundRow::GameAudioVolume => format!("Game Audio Volume: {}%", self.game_audio.volume),
                 SoundRow::Back => "Back".to_string(),
             })
             .collect()
@@ -618,14 +618,14 @@ fn update_label_for(status: &updater::Status) -> String {
     use updater::Status::*;
     let current = env!("CARGO_PKG_VERSION");
     match status {
-        Off => format!("Check for updates (v{current})"),
-        Checking => "Checking for updates…".into(),
-        UpToDate => format!("No new updates (v{current})"),
-        Available(r) => format!("Install update v{}", r.version),
+        Off => format!("Check for Updates (v{current})"),
+        Checking => "Checking for Updates…".into(),
+        UpToDate => format!("No New Updates (v{current})"),
+        Available(r) => format!("Install Update v{}", r.version),
         Downloading { version, percent } => format!("Downloading v{version}… {percent}%"),
         Staged { version, .. } => format!("Installing v{version}…"),
-        Restarting(version) => format!("Restarting into v{version}…"),
-        Failed(why) => format!("Update failed: {}", why.chars().take(40).collect::<String>()),
+        Restarting(version) => format!("Restarting Into v{version}…"),
+        Failed(why) => format!("Update Failed: {}", why.chars().take(40).collect::<String>()),
     }
 }
 

@@ -482,7 +482,7 @@ impl App {
             let title = match menu.kind {
                 MenuKind::Exit => "Exit",
                 MenuKind::Options => "Options",
-                MenuKind::Attract => "Attract mode",
+                MenuKind::Attract => "Attract Mode",
                 MenuKind::Sound => "Sound",
             };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };

@@ -65,20 +65,20 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. Inside a playlist, the **All games** wheel takes you back; it sits one step back from the first game. Rusty Popper always starts in All games, on the first game alphabetically.
 
-**The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart cabinet* and *Shut down cabinet*. It always opens on *Back to games*, so a stray press can't power anything off.
+**The exit menu** has *Back to Games*, *Options*, *Exit Rusty Popper*, *Restart Cabinet* and *Shut Down Cabinet*. It always opens on *Back to Games*, so a stray press can't power anything off.
 
 **Options** (Exit → Options) change things on the spot and save them. A fresh install starts with the arc wheel, attract mode after 3 minutes idle (12 seconds per game), video volume 50, sound effects 30 and game audio 50.
 
-- Wheel style (arc, cover flow, minimal or vertical)
-- **Attract mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
+- Wheel Style (Arc, Cover Flow, Minimal or Vertical)
+- **Attract Mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with video sound, sound effects and game audio, each on or off with its own volume (a volume only shows while its sound is on). Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
-- **Phone remote** on or off (off by default; see below)
-- Install update / check for updates
+- **Phone Remote** on or off (off by default; see below)
+- Install Update / Check for Updates
 
 **DOF (cabinet lights, flashers, shakers and other toys)** is optional and off until you turn it on in Options. Rusty Popper drives DOF the way Popper's menu does, using the **PinUP Menu** table (ROM `pinupmenu`) from the DOF Config Tool, so your existing config works as it is: flashes for wheel and page moves (`E800`, `E801`, `E804`, `E805`), a random effect (`E901` to `E990`) for each game the wheel stops on, DOF handed to the table while a game runs, and everything off when the menu exits. It uses Popper's DOF bridge (`PinUPDOF.DOFLink`) if it's there, otherwise DOF's own COM object (`DirectOutput.ComObject`, registered for 64-bit). If neither is installed, nothing happens. There's no lighting setup in Rusty Popper itself; change effects in the DOF Config Tool.
 
-**Phone remote** is optional and off until you turn it on in Options. It's a small web page on your home network that shows the game being played (or the one on the wheel) with its details and play time, has a **Settings** card with everything in Options (except the phone remote's own switch) plus checking for and installing updates, and has *Exit Rusty Popper*, *Restart cabinet* and *Shut down cabinet* buttons. Each button needs a second tap to confirm. A *Pinball processes* page lists running VPinball, Future Pinball, PinMAME, PinUP Popper/PuP, dmdext, FlexDMD and B2S backglass processes, with a *Kill* button for each (and *Kill all*) for a table that hangs; Rusty Popper then goes back to the wheel. *Real-time Performance*, below the Settings button, shows how busy each CPU core, the GPU (with its 3D and video-decode engines) and each disk are, refreshed every second, the same numbers as Task Manager. The cabinet only reads these while that page is open on a phone. *Exit* is greyed out while a game is running; *Restart* and *Shut down* close the game properly first (its close script and play statistics), then power off. A small QR code in the top-right corner of the wheel, beside the game counter, opens the page. The address is also shown in Options, on the *Phone remote* row.
+**Phone remote** is optional and off until you turn it on in Options. It's a small web page on your home network that shows the game being played (or the one on the wheel) with its details and play time, has a **Settings** card with everything in Options (except the phone remote's own switch) plus checking for and installing updates, and has *Exit Rusty Popper*, *Restart Cabinet* and *Shut Down Cabinet* buttons. Each button needs a second tap to confirm. A *Pinball Processes* page lists running VPinball, Future Pinball, PinMAME, PinUP Popper/PuP, dmdext, FlexDMD and B2S backglass processes, with a *Kill* button for each (and *Kill All*) for a table that hangs; Rusty Popper then goes back to the wheel. *Real-time Performance*, below the Settings button, shows how busy each CPU core, the GPU (with its 3D and video-decode engines) and each disk are, refreshed every second, the same numbers as Task Manager. The cabinet only reads these while that page is open on a phone. *Exit* is greyed out while a game is running; *Restart* and *Shut down* close the game properly first (its close script and play statistics), then power off. A small QR code in the top-right corner of the wheel, beside the game counter, opens the page. The address is also shown in Options, on the *Phone Remote* row.
 
 - The address is `http://<cabinet's IP>:8642/`. The port stays the same (change it with `port` under `[remote]`). To keep the IP the same too, give the cabinet a fixed address (a DHCP reservation) in your router. Rusty Popper finds its own address, and you can set the one the QR code shows with `address`.
 - Run `Allow-RustyPopperRemote.ps1` once (right-click, *Run with PowerShell*) so Windows Firewall lets phones in. Otherwise Windows may ask the first time, and the question can be hidden behind the cabinet's screens.
@@ -89,7 +89,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 When Rusty Popper starts, it checks GitHub for a newer release. If there is one, a small **UPDATE vX AVAILABLE** note appears in the corner of the wheel.
 
-To install it, go to **Exit → Options → Install update vX**. Rusty Popper then:
+To install it, go to **Exit → Options → Install Update vX**. Rusty Popper then:
 
 1. downloads the release
 2. checks it against the SHA-256 checksum GitHub publishes for it, and refuses it if they don't match
