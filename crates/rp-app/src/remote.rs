@@ -389,11 +389,13 @@ fn read_request(stream: &mut impl Read) -> Result<Req, BadRequest> {
         // Search only the new bytes (and the three before them).
         let from = head.len().saturating_sub(3);
         head.extend_from_slice(&buf[..n]);
-        if let Some(i) = head[from..].windows(4).position(|w| w == b"\r\n\r\n") {
-            break from + i;
-        }
-        if head.len() > MAX_HEAD {
+        let found = head[from..].windows(4).position(|w| w == b"\r\n\r\n").map(|i| from + i);
+        // Too big whether or not this read finished it.
+        if found.unwrap_or(head.len()) > MAX_HEAD {
             return Err(BadRequest::Status(431, "Request too large"));
+        }
+        if let Some(end) = found {
+            break end;
         }
     };
     let head = std::str::from_utf8(&head[..end]).map_err(|_| BadRequest::Status(400, "Bad request"))?;
