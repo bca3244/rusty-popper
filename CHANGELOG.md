@@ -2,6 +2,12 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.48] - 2026-11-26
+
+### Fixed
+- Layout: *Wheels Each Side* now always shows exactly that many wheels. Before, it quietly showed fewer when it judged they wouldn't fit (Arc at 100% showed only one each side). More wheels than fit now overlap or run off the screen edge, your choice.
+- A row along the bottom spaces its wheels for typical round or slightly wide wheel images instead of the widest possible logo, so the gaps are smaller and Arc fits two each side at 100%.
+
 ## [0.2.47] - 2026-11-26
 
 ### Added
