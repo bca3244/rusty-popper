@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.51] - 2026-11-26
+
+### Changed
+- DOF: the wheel and page pulses (`E800`/`E801`/`E804`/`E805`) now fire at most twice a second in all. Holding a flipper used to send one on every step (up to ~28 a second); the extra pulses are now dropped instead of queued, so the toys don't keep flashing after you let go. The per-game random effect was already only sent once the wheel settles.
+
 ## [0.2.50] - 2026-11-26
 
 ### Added
