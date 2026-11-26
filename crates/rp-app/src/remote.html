@@ -53,7 +53,7 @@
   .proc div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .proc small { display: block; color: var(--dim); }
   #procs-empty { color: var(--dim); }
-  #open-perf { margin-top: 14px; }
+  #open-perf { margin: -8px 0 14px; }
   .meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; margin: 8px 0 10px; }
   .meter span { overflow-wrap: anywhere; }
   .meter output { color: var(--dim); font-variant-numeric: tabular-nums; text-align: right; }
@@ -101,7 +101,6 @@
     <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
     <h2>Updates</h2>
     <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
-    <button id="open-perf">Real-time Performance</button>
   </section>
   <section class="card" id="perf" hidden>
     <button class="small back">‹ Back</button>
@@ -124,6 +123,7 @@
   </section>
   <section class="card" id="actions">
     <button id="open-settings" hidden>Settings</button>
+    <button id="open-perf">Real-time Performance</button>
     <button id="open-procs">Pinball processes</button>
     <button data-cmd="exit">Exit Rusty Popper</button>
     <button data-cmd="restart" class="power">Restart cabinet</button>
