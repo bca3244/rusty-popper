@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.45] - 2026-11-26
+
+### Changed
+- The phone remote's **Real-time Performance** button is now on the main page, right below Settings, instead of at the bottom of the Settings page.
+
 ## [0.2.44] - 2026-11-26
 
 ### Added
