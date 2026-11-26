@@ -59,11 +59,11 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 | | | W | Switch wheel style (arc, cover flow, minimal, vertical) |
 | | | Q | Quit at once (can be turned off) |
 
-**While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper.
+**While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper. If the table is stuck and doesn't close, press Exit again to end it at once instead of waiting 20 seconds. If a game doesn't start at all, the wheel says so for a few seconds.
 
 **Tables started elsewhere** (VPin Studio's launcher or its media recorder, for example): while the table is on screen, Rusty Popper hides its windows and pauses its videos, as if the menu had been closed, so recordings show the table rather than the menu. It comes back when the table closes. In VPin Studio's recorder, use the *Emulator* launch mode; the *Frontend* mode starts Popper's own menu.
 
-**Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. Inside a playlist, the **All games** wheel takes you back; it sits one step back from the first game. Rusty Popper remembers the last playlist you used.
+**Playlists** appear as wheels after the last game (step back from the first game to reach them). Press Start on one to switch to it. Inside a playlist, the **All games** wheel takes you back; it sits one step back from the first game. Rusty Popper always starts in All games, on the first game alphabetically.
 
 **The exit menu** has *Back to games*, *Options*, *Exit Rusty Popper*, *Restart cabinet* and *Shut down cabinet*. It always opens on *Back to games*, so a stray press can't power anything off.
 
@@ -124,7 +124,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 - **Next to the exe:**
   - `rusty-popper.log`, for troubleshooting
   - `rusty-popper.toml`, when you change Options
-  - `last-playlist.txt`, and `last-screen.txt` (where to show an error screen)
+  - `last-screen.txt` (where to show an error screen)
   - `update\` while an update downloads (removed once the new version is confirmed), and `rollback\`, which holds the previous version
 
 Nothing else of Popper's is changed. Rusty Popper notices when the database changes (tables added in Popper's setup or VPin Studio, playlists edited) and picks the changes up without a restart.

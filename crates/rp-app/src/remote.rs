@@ -810,12 +810,13 @@ impl crate::App {
                 Command::Restart | Command::Shutdown => {
                     let flag = if cmd == Command::Restart { "/r" } else { "/s" };
                     let _ = reply.send(Ok(()));
-                    match &self.playing {
+                    match self.playing.as_mut() {
                         // Close the game properly first (its close script, the
                         // play statistics); return_from_game then powers off.
                         Some(p) => {
                             log::info!("Phone remote: closing the game before {flag}");
                             p.ctl.request_stop();
+                            p.stop_pressed = Some(std::time::Instant::now());
                             self.pending_power = Some((flag, std::time::Instant::now()));
                         }
                         None => crate::power(el, flag),

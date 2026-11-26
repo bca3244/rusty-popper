@@ -17,16 +17,25 @@ impl App {
                 // takes the focus back; if nothing ever started, whatever the
                 // player switched to meanwhile keeps it.
                 let ran = p.ctl.stop_requested() || matches!(result, Ok(rp_launch::Outcome::Finished { .. }));
+                let failed = !p.ctl.stop_requested() && !matches!(result, Ok(rp_launch::Outcome::Finished { .. }));
+                let index = p.index;
                 match result {
                     Ok(outcome) => log::info!("Back from game ({outcome:?})"),
                     Err(e) => log::error!("Launch failed: {e:#}"),
                 }
                 self.return_from_game(el, ran);
+                if failed {
+                    self.launch_failed(index);
+                }
                 return Ok(());
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("The game thread ended without a result");
+                let (index, closing) = (p.index, p.ctl.stop_requested());
                 self.return_from_game(el, true);
+                if !closing {
+                    self.launch_failed(index);
+                }
                 return Ok(());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -89,9 +98,21 @@ impl App {
             // Popper's "Exit Emulators" button closes the game, whichever
             // window has the focus (ignored for a moment after Start).
             let pressed = g.joysticks.exit_pressed(&self.bindings);
-            if pressed && p.since.elapsed() >= Duration::from_secs(1) && !p.ctl.stop_requested() {
-                log::info!("Exit button pressed: closing the game");
-                p.ctl.request_stop();
+            if pressed && p.since.elapsed() >= Duration::from_secs(1) {
+                match p.stop_pressed {
+                    None if !p.ctl.stop_requested() => {
+                        log::info!("Exit button pressed: closing the game");
+                        p.ctl.request_stop();
+                        p.stop_pressed = Some(Instant::now());
+                    }
+                    // Pressed again (a moment later, so not a bounce): the
+                    // table is stuck, end it now.
+                    Some(t) if !p.ctl.force_requested() && t.elapsed() >= FORCE_AFTER => {
+                        log::info!("Exit button pressed again: force-closing the game");
+                        p.ctl.request_force();
+                    }
+                    _ => {}
+                }
             }
         }
         if phase == Phase::Exiting && p.exiting_since.is_none() {
@@ -187,6 +208,7 @@ impl App {
             if let Some(g) = self.gfx.as_mut() {
                 g.load_logos(&self.lib.items, g.shown);
             }
+            self.launch_failed(index);
             return;
         }
         // The launch screen covers the playfield video: stop decoding it so
@@ -207,7 +229,15 @@ impl App {
             kept_video,
             logos_released: false,
             last_render: None,
+            stop_pressed: None,
         });
+    }
+
+    /// Tells the player on the wheel that a game didn't start (instead of a
+    /// silent return to the wheel).
+    pub(crate) fn launch_failed(&mut self, index: usize) {
+        let title = self.lib.items.get(index).map_or("the game", |it| it.title.as_str());
+        self.notice = Some((format!("Couldn't start {title}"), Instant::now()));
     }
 
     /// Brings the menu back after a game: screens, video, logos and (when

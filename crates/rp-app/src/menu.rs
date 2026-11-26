@@ -22,9 +22,7 @@ impl App {
                 }
             }
         }
-        let name = self.lib.playlist_name(self.playlist).to_string();
-        log::info!("Playlist: {name} ({} entries)", self.view.len());
-        let _ = std::fs::write(state_path(), name);
+        log::info!("Playlist: {} ({} entries)", self.lib.playlist_name(self.playlist), self.view.len());
     }
 
     /// Moves to the first game of the next (`dir` > 0) or previous letter
@@ -416,10 +414,11 @@ impl App {
         // While a game is loading or running the menu isn't on screen, so
         // nothing may act on it. The exit key closes the game instead (it
         // only reaches us if the game never took the keyboard focus).
-        if let Some(p) = &self.playing {
+        if let Some(p) = self.playing.as_mut() {
             if action == Menu && !p.ctl.stop_requested() {
                 log::info!("Exit pressed: closing the game");
                 p.ctl.request_stop();
+                p.stop_pressed = Some(Instant::now());
             }
             return;
         }
