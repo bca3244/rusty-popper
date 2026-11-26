@@ -33,6 +33,13 @@
   #msg.err { color: #ff8a80; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 14px 0 6px; font-weight: 600; }
   h2:first-child { margin-top: 0; }
+  /* Settings and Performance: one card per section, with a copper header strip. */
+  .group { padding: 0 16px 4px; overflow: hidden; }
+  .group h2 { margin: 0 -16px; padding: 11px 16px 10px; color: var(--copper); font-size: 13px; font-weight: 700; letter-spacing: .12em;
+    background: linear-gradient(90deg, rgba(208,138,78,.20), rgba(208,138,78,.04)); border-bottom: 1px solid rgba(208,138,78,.35); }
+  .group .row { border-top: 1px solid var(--line); }
+  .group h2 + .row { border-top: 0; }
+  .group.meters { padding-bottom: 10px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
   .row[hidden] { display: none; }
   .row label { flex: 1; white-space: nowrap; }
@@ -45,7 +52,7 @@
   input[type=checkbox]:checked::after { left: 23px; }
   #update-status { color: var(--dim); font-size: 14px; }
   button.small { width: auto; min-height: 40px; padding: 0 16px; margin: 0; }
-  button.back { margin-bottom: 4px; }
+  button.back { margin: 0 0 12px; }
   #open-settings { margin-bottom: 14px; }
   #open-procs { margin: -8px 0 14px; }
   .proc { display: flex; align-items: center; gap: 12px; min-height: 52px; border-top: 1px solid var(--line); }
@@ -79,46 +86,62 @@
     <div id="sub"></div>
     <dl id="facts"></dl>
   </section>
-  <section class="card" id="settings" hidden>
+  <section id="settings" hidden>
     <button class="small back" id="back">‹ Back</button>
-    <h2>Layout</h2>
-    <div class="row"><label for="style">Template</label>
-      <select id="style" data-key="style">
-        <option value="arc">Arc</option><option value="flow">Cover Flow</option><option value="minimal">Minimal</option><option value="vertical">Vertical</option>
-      </select></div>
-    <div class="row"><label for="size">Wheel Size</label><select id="size" data-key="size"></select></div>
-    <div class="row"><label for="position">Position</label>
-      <select id="position" data-key="position">
-        <option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option>
-      </select></div>
-    <div class="row"><label for="side_wheels">Wheels Each Side</label><select id="side_wheels" data-key="side_wheels"></select></div>
-    <div class="row"><label for="arc">Arc</label><input type="checkbox" id="arc" data-key="arc"></div>
-    <div class="row"><span id="layout-note"></span><button class="small" id="layout-reset">Reset to Template</button></div>
-    <h2>Attract Mode</h2>
-    <div class="row"><label for="attract">Attract Mode</label><input type="checkbox" id="attract" data-key="attract"></div>
-    <div class="row" data-parent="attract"><label for="attract_idle">Starts After</label><select id="attract_idle" data-key="attract_idle"></select></div>
-    <div class="row" data-parent="attract"><label for="attract_interval">Time per Game</label><select id="attract_interval" data-key="attract_interval"></select></div>
-    <h2>Sound</h2>
-    <div class="row"><label for="video_sound">Video Sound</label><input type="checkbox" id="video_sound" data-key="video_sound"></div>
-    <div class="row" data-parent="video_sound"><label for="volume">Video Volume</label><input type="range" id="volume" data-key="volume" min="0" max="100" step="10"><output for="volume"></output></div>
-    <div class="row"><label for="sfx">Sound Effects</label><input type="checkbox" id="sfx" data-key="sfx"></div>
-    <div class="row" data-parent="sfx"><label for="sfx_volume">Effects Volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
-    <div class="row"><label for="game_audio">Game Audio</label><input type="checkbox" id="game_audio" data-key="game_audio"></div>
-    <div class="row" data-parent="game_audio"><label for="game_audio_volume">Game Audio Volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
-    <h2>Cabinet</h2>
-    <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
-    <h2>Updates</h2>
-    <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
+    <div class="card group">
+      <h2>Layout</h2>
+      <div class="row"><label for="style">Template</label>
+        <select id="style" data-key="style">
+          <option value="arc">Arc</option><option value="flow">Cover Flow</option><option value="minimal">Minimal</option><option value="vertical">Vertical</option>
+        </select></div>
+      <div class="row"><label for="size">Wheel Size</label><select id="size" data-key="size"></select></div>
+      <div class="row"><label for="position">Position</label>
+        <select id="position" data-key="position">
+          <option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option>
+        </select></div>
+      <div class="row"><label for="side_wheels">Wheels Each Side</label><select id="side_wheels" data-key="side_wheels"></select></div>
+      <div class="row"><label for="arc">Arc</label><input type="checkbox" id="arc" data-key="arc"></div>
+      <div class="row"><span id="layout-note"></span><button class="small" id="layout-reset">Reset to Template</button></div>
+    </div>
+    <div class="card group">
+      <h2>Attract Mode</h2>
+      <div class="row"><label for="attract">Attract Mode</label><input type="checkbox" id="attract" data-key="attract"></div>
+      <div class="row" data-parent="attract"><label for="attract_idle">Starts After</label><select id="attract_idle" data-key="attract_idle"></select></div>
+      <div class="row" data-parent="attract"><label for="attract_interval">Time per Game</label><select id="attract_interval" data-key="attract_interval"></select></div>
+    </div>
+    <div class="card group">
+      <h2>Sound</h2>
+      <div class="row"><label for="video_sound">Video Sound</label><input type="checkbox" id="video_sound" data-key="video_sound"></div>
+      <div class="row" data-parent="video_sound"><label for="volume">Video Volume</label><input type="range" id="volume" data-key="volume" min="0" max="100" step="10"><output for="volume"></output></div>
+      <div class="row"><label for="sfx">Sound Effects</label><input type="checkbox" id="sfx" data-key="sfx"></div>
+      <div class="row" data-parent="sfx"><label for="sfx_volume">Effects Volume</label><input type="range" id="sfx_volume" data-key="sfx_volume" min="0" max="100" step="10"><output for="sfx_volume"></output></div>
+      <div class="row"><label for="game_audio">Game Audio</label><input type="checkbox" id="game_audio" data-key="game_audio"></div>
+      <div class="row" data-parent="game_audio"><label for="game_audio_volume">Game Audio Volume</label><input type="range" id="game_audio_volume" data-key="game_audio_volume" min="0" max="100" step="10"><output for="game_audio_volume"></output></div>
+    </div>
+    <div class="card group">
+      <h2>Cabinet</h2>
+      <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
+    </div>
+    <div class="card group">
+      <h2>Updates</h2>
+      <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
+    </div>
   </section>
-  <section class="card" id="perf" hidden>
+  <section id="perf" hidden>
     <button class="small back">‹ Back</button>
-    <h2>CPU</h2>
-    <div id="perf-cpu"></div>
-    <div id="perf-cores" class="cores"></div>
-    <h2>GPU</h2>
-    <div id="perf-gpu"></div>
-    <h2>Disks</h2>
-    <div id="perf-disks"></div>
+    <div class="card group meters">
+      <h2>CPU</h2>
+      <div id="perf-cpu"></div>
+      <div id="perf-cores" class="cores"></div>
+    </div>
+    <div class="card group meters">
+      <h2>GPU</h2>
+      <div id="perf-gpu"></div>
+    </div>
+    <div class="card group meters">
+      <h2>Disks</h2>
+      <div id="perf-disks"></div>
+    </div>
     <p id="perf-note">Reading…</p>
   </section>
   <section class="card" id="procs" hidden>
