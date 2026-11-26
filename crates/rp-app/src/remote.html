@@ -53,6 +53,20 @@
   .proc div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .proc small { display: block; color: var(--dim); }
   #procs-empty { color: var(--dim); }
+  #open-perf { margin-top: 14px; }
+  .meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; margin: 8px 0 10px; }
+  .meter span { overflow-wrap: anywhere; }
+  .meter output { color: var(--dim); font-variant-numeric: tabular-nums; text-align: right; }
+  .meter.big span, .meter.big output { font-size: 20px; font-weight: 650; color: var(--text); }
+  .meter small[hidden] { display: none; }
+  .meter small { grid-column: 1 / -1; color: var(--dim); font-size: 13px; margin-top: -2px; }
+  .bar { grid-column: 1 / -1; height: 8px; border-radius: 4px; background: #262c38; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--copper); transition: width .4s; }
+  .bar i.hot { background: var(--danger); }
+  .cores { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 10px; }
+  .cores .meter { margin: 0; font-size: 13px; }
+  .cores .bar { height: 6px; }
+  #perf-note { color: var(--dim); font-size: 14px; }
 </style>
 </head>
 <body>
@@ -87,6 +101,18 @@
     <div class="row"><label for="dof">DOF</label><input type="checkbox" id="dof" data-key="dof"></div>
     <h2>Updates</h2>
     <div class="row"><span id="update-status"></span><button class="small" id="update"></button></div>
+    <button id="open-perf">Real-time Performance</button>
+  </section>
+  <section class="card" id="perf" hidden>
+    <button class="small back">‹ Back</button>
+    <h2>CPU</h2>
+    <div id="perf-cpu"></div>
+    <div id="perf-cores" class="cores"></div>
+    <h2>GPU</h2>
+    <div id="perf-gpu"></div>
+    <h2>Disks</h2>
+    <div id="perf-disks"></div>
+    <p id="perf-note">Reading…</p>
   </section>
   <section class="card" id="procs" hidden>
     <button class="small back">‹ Back</button>
@@ -201,16 +227,19 @@ function updateText(st) {
 }
 // The Settings view replaces the main one; the phone's Back button returns.
 function route() {
-  const settings = location.hash === "#settings" && haveSettings, procs = location.hash === "#procs";
+  const settings = location.hash === "#settings" && haveSettings, procs = location.hash === "#procs", perf = location.hash === "#perf";
   $("settings").hidden = !settings;
   $("procs").hidden = !procs;
-  for (const id of ["game", "actions"]) $(id).hidden = settings || procs;
+  $("perf").hidden = !perf;
+  for (const id of ["game", "actions"]) $(id).hidden = settings || procs || perf;
   if (procs) pollProcs();
+  if (perf) pollPerf();
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
 $("open-settings").addEventListener("click", () => { location.hash = "settings"; });
 $("open-procs").addEventListener("click", () => { location.hash = "procs"; });
+$("open-perf").addEventListener("click", () => { location.hash = "perf"; });
 for (const b of document.querySelectorAll("button.back")) b.addEventListener("click", () => { history.length > 1 ? history.back() : (location.hash = ""); });
 
 // Pinball processes: read while that view is open; each Kill needs a second tap.
@@ -265,6 +294,61 @@ async function kill(b, pid, label) {
   pollProcs();
 }
 $("kill-all").addEventListener("click", () => kill($("kill-all"), "all", "Kill all"));
+
+// Real-time Performance: read once a second while that view is open and the
+// phone is looking at it. The cabinet only reads its counters while asked.
+let perfTimer = 0, perfGen = 0;
+async function pollPerf() {
+  clearTimeout(perfTimer);
+  const gen = ++perfGen; // a newer call takes over this loop
+  if (location.hash !== "#perf" || document.hidden) return;
+  try {
+    const r = await fetch("/api/perf" + q, { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    if (gen !== perfGen) return;
+    if (r.ok) showPerf(await r.json());
+    else $("perf-note").textContent = await r.text();
+  } catch (e) { if (gen === perfGen) $("perf-note").textContent = "Cabinet not reachable"; }
+  if (gen === perfGen) perfTimer = setTimeout(pollPerf, 1000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollPerf(); });
+// Meters are updated in place (so the bars glide); rebuilt only when the
+// list changes.
+function meter() {
+  const m = document.createElement("div"), bar = document.createElement("div");
+  bar.className = "bar";
+  bar.appendChild(document.createElement("i"));
+  m.append(document.createElement("span"), document.createElement("output"), bar, document.createElement("small"));
+  return m;
+}
+function meters(box, list, cls, empty) {
+  if (!list.length) { box.textContent = empty; delete box.dataset.names; return; }
+  const names = list.map((x) => x.label).join("\n");
+  if (box.dataset.names !== names) {
+    box.dataset.names = names;
+    box.replaceChildren(...list.map(() => meter()));
+  }
+  list.forEach((x, i) => {
+    const m = box.children[i], [name, val, bar, sub] = m.children, fill = bar.firstChild;
+    m.className = "meter" + (cls && i === 0 ? " " + cls : "");
+    name.textContent = x.label;
+    val.textContent = x.pct == null ? "–" : Math.round(x.pct) + "%";
+    fill.style.width = (x.pct || 0) + "%";
+    fill.className = x.pct >= 90 ? "hot" : "";
+    sub.textContent = x.sub || "";
+    sub.hidden = !x.sub;
+  });
+}
+function rate(b) {
+  return b >= 1e9 ? (b / 1e9).toFixed(1) + " GB/s" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB/s" : b >= 1e3 ? Math.round(b / 1e3) + " KB/s" : Math.round(b) + " B/s";
+}
+function showPerf(p) {
+  if (!p.available) { $("perf-note").textContent = "Windows performance counters aren't available on the cabinet right now."; return; }
+  $("perf-note").textContent = "";
+  meters($("perf-cpu"), [{ label: "All cores", pct: p.cpu, sub: p.cores.length ? p.cores.length + " logical cores" : "" }], "big", "");
+  meters($("perf-cores"), p.cores.map((v, i) => ({ label: String(i + 1), pct: v })), "", "");
+  meters($("perf-gpu"), p.gpu == null ? [] : [{ label: "Overall", pct: p.gpu }, ...p.gpu_engines.map((e) => ({ label: e.name, pct: e.pct }))], "big", "No GPU counters.");
+  meters($("perf-disks"), p.disks.map((d) => ({ label: d.name, pct: d.busy, sub: rate(d.bytes) })), "", "No disk counters.");
+}
 
 async function setting(key, value) {
   touched[key] = Date.now();

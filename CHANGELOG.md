@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.44] - 2026-11-26
+
+### Added
+- **Real-time Performance** on the phone remote (Settings → Real-time Performance): how busy each CPU core, the GPU (overall plus 3D, Video Decode and other engines) and each disk are, with disk read/write speed, refreshed every second. The numbers come from Windows' performance counters, the same ones Task Manager uses, and are only read while the page is open on a phone.
+
 ## [0.2.43] - 2026-11-26
 
 ### Changed

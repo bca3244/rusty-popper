@@ -16,6 +16,9 @@
 //! POST with a custom header, which a web page on another site can't send
 //! without the browser asking first, so a link or form elsewhere can't press
 //! the buttons.
+//!
+//! The page's Real-time Performance view reads CPU, disk and GPU load from
+//! `/api/perf` once a second while it's open (see `sysload`).
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -50,6 +53,8 @@ const PIN_FORGET: Duration = Duration::from_secs(60 * 60);
 /// How often to look whether the cabinet's address has changed (the network
 /// can come up after Rusty Popper at boot).
 const ADDRESS_EVERY: Duration = Duration::from_secs(20);
+/// How often to look whether the performance counters can be closed.
+const LOAD_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// How long a command waits for the menu thread to take it.
 const REPLY_WAIT: Duration = Duration::from_secs(3);
 /// Wheel images bigger than this aren't sent.
@@ -163,6 +168,8 @@ struct Shared {
     pin: Option<String>,
     /// `[remote] address`, also accepted as a Host name.
     address: Option<String>,
+    /// The Real-time Performance counters, open only while a page reads them.
+    load: Mutex<crate::sysload::Load>,
 }
 
 /// The running web server.
@@ -207,6 +214,7 @@ impl Remote {
             pin_guard: Mutex::new(PinGuard::default()),
             pin,
             address,
+            load: Mutex::new(crate::sysload::Load::default()),
         });
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = shared.clone();
@@ -309,7 +317,16 @@ struct PinGuard {
 /// each on a short-lived thread so a slow or stalled phone holds up nobody.
 fn serve(listener: TcpListener, shared: Arc<Shared>, tx: Sender<Request>, port: u16) {
     let mut address_checked = std::time::Instant::now();
+    let mut load_checked = std::time::Instant::now();
     while !shared.stop.load(Ordering::Relaxed) {
+        // Closes the performance counters once no page is reading them (a
+        // busy lock means one is).
+        if load_checked.elapsed() >= LOAD_CHECK_EVERY {
+            load_checked = std::time::Instant::now();
+            if let Ok(mut load) = shared.load.try_lock() {
+                load.idle();
+            }
+        }
         if address_checked.elapsed() >= ADDRESS_EVERY {
             address_checked = std::time::Instant::now();
             let url = make_url(&host_for(shared.address.as_deref()), port, shared.pin.as_deref());
@@ -459,6 +476,7 @@ fn handle(req: &Req, shared: &Shared, tx: &Sender<Request>) -> Response {
         "/api/status" if get => status(shared),
         "/api/wheel.png" if get => wheel_image(shared),
         "/api/procs" if get => procs(),
+        "/api/perf" if get => perf(shared),
         // Ended here, not on the menu thread (taskkill takes a moment). A
         // game Rusty Popper started then ends as if it had exited.
         "/api/kill" if post && !has_header => text(403, "Missing header"),
@@ -587,6 +605,12 @@ fn wheel_image(shared: &Shared) -> Response {
 fn procs() -> Response {
     let list: Vec<_> = rp_launch::processes_named(KILLABLE).into_iter().map(|p| serde_json::json!({ "pid": p.pid, "name": p.name, "secs": p.secs })).collect();
     respond(200, "application/json", serde_json::to_vec(&list).unwrap_or_default())
+}
+
+/// The Real-time Performance reading, as JSON.
+fn perf(shared: &Shared) -> Response {
+    let stats = shared.load.lock().map(|mut l| l.read()).unwrap_or_default();
+    respond(200, "application/json", serde_json::to_vec(&stats).unwrap_or_default())
 }
 
 /// `pid=123` (one process) or `pid=all` (`Some(None)`).
@@ -987,6 +1011,9 @@ mod tests {
         assert!(get("POST /api/kill?pin=9&pid=all HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"), "a kill needs the header");
         let list = get("GET /api/procs?pin=9 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert!(list.starts_with("HTTP/1.1 200") && list.ends_with(']'), "{list}");
+        let perf = get("GET /api/perf?pin=9 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        assert!(perf.starts_with("HTTP/1.1 200") && perf.contains("\"cores\":"), "{perf}");
+        assert!(get("GET /api/perf HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"), "perf needs the PIN");
         assert!(get("POST /api/exit?pin=9 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").starts_with("HTTP/1.1 403"), "a command needs the header");
         // A command reaches the menu thread, which answers it.
         let answer = std::thread::spawn(move || {

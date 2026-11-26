@@ -32,6 +32,7 @@ mod render;
 mod session;
 mod settings;
 mod sfx;
+mod sysload;
 mod updater;
 mod video;
 mod wheel;
