@@ -81,11 +81,19 @@
   </section>
   <section class="card" id="settings" hidden>
     <button class="small back" id="back">‹ Back</button>
-    <h2>Wheel</h2>
-    <div class="row"><label for="style">Wheel Style</label>
+    <h2>Layout</h2>
+    <div class="row"><label for="style">Template</label>
       <select id="style" data-key="style">
         <option value="arc">Arc</option><option value="flow">Cover Flow</option><option value="minimal">Minimal</option><option value="vertical">Vertical</option>
       </select></div>
+    <div class="row"><label for="size">Wheel Size</label><select id="size" data-key="size"></select></div>
+    <div class="row"><label for="position">Position</label>
+      <select id="position" data-key="position">
+        <option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option>
+      </select></div>
+    <div class="row"><label for="side_wheels">Wheels Each Side</label><select id="side_wheels" data-key="side_wheels"></select></div>
+    <div class="row"><label for="arc">Arc</label><input type="checkbox" id="arc" data-key="arc"></div>
+    <div class="row"><span id="layout-note"></span><button class="small" id="layout-reset">Reset to Template</button></div>
     <h2>Attract Mode</h2>
     <div class="row"><label for="attract">Attract Mode</label><input type="checkbox" id="attract" data-key="attract"></div>
     <div class="row" data-parent="attract"><label for="attract_idle">Starts After</label><select id="attract_idle" data-key="attract_idle"></select></div>
@@ -196,6 +204,10 @@ function showSettings(st) {
   $("open-settings").hidden = false;
   fillChoices($("attract_idle"), st.idle_choices, mins);
   fillChoices($("attract_interval"), st.interval_choices, (v) => v + " s");
+  fillChoices($("size"), st.size_choices, (v) => v + "%");
+  fillChoices($("side_wheels"), Array.from({ length: st.max_side_wheels + 1 }, (_, i) => i), String);
+  $("layout-note").textContent = st.layout_changed ? "Changed from the template" : "Same as the template";
+  $("layout-reset").disabled = !st.layout_changed;
   for (const el of document.querySelectorAll("[data-key]")) {
     const k = el.dataset.key;
     if (Date.now() - (touched[k] || 0) < 3000) continue;
@@ -369,6 +381,7 @@ for (const el of document.querySelectorAll("[data-key]")) {
     el.addEventListener("change", () => setting(k, el.value));
   }
 }
+$("layout-reset").addEventListener("click", () => { $("layout-reset").disabled = true; setting("layout_reset", "1").then(poll1); });
 $("update").addEventListener("click", () => {
   const install = $("update").dataset.action === "install";
   if (!install) { checkedAt = Date.now(); $("update-status").textContent = "Checking for Updates…"; setTimeout(poll1, 1600); }

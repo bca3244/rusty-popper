@@ -99,7 +99,16 @@ pub enum Command {
 /// The Options settings, for the page's Settings card.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct SettingsView {
+    /// The layout template, and the layout (Options → Layout).
     pub style: &'static str,
+    pub size: u32,
+    pub size_choices: &'static [u32],
+    pub position: &'static str,
+    pub side_wheels: u32,
+    pub max_side_wheels: u32,
+    pub arc: bool,
+    /// The layout differs from the template's.
+    pub layout_changed: bool,
     pub attract: bool,
     pub attract_idle: u64,
     pub attract_interval: u64,

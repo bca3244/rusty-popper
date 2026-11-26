@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 
 ## Features
 
-- **Four wheel styles:** an arc wheel, a cover flow with sliding videos, minimal (one big logo with its neighbours peeking in at the edges) and vertical (a list of large logos down the right edge). Switch in Options.
+- **Adjustable wheel layout:** start from one of four templates (an arc wheel, a cover flow with sliding videos, minimal with one big logo and its neighbours peeking in at the edges, and vertical with a list of logos down the right edge), then change the wheel size, its position (bottom, left or right), how many wheels show each side and whether the row curves. All in Options → Layout.
 - **Every cabinet screen:** playfield, backglass, DMD, FullDMD and topper all follow the selected game, using Popper's own screen layout and playfield rotation.
 - **Launches through Popper's scripts:** VPX, Future Pinball and others start exactly as they do in Popper. "Launching" and "Exiting" screens mean the desktop never shows.
 - **Playlists as wheels:** Popper's playlists sit on the wheel where it wraps from the last game back to the first.
@@ -56,7 +56,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 | Game Help | | H | Show the game's help card |
 | System Menu / Exit Emulators | Exit | Esc | Open the exit menu |
 | List Next / List Prior | | P | Jump to the playlist wheels |
-| | | W | Switch wheel style (arc, cover flow, minimal, vertical) |
+| | | W | Switch layout template (arc, cover flow, minimal, vertical) |
 | | | Q | Quit at once (can be turned off) |
 
 **While a game runs**, Popper's *Exit Emulators* button closes it with the emulator's own close script, just like Popper. If the table is stuck and doesn't close, press Exit again to end it at once instead of waiting 20 seconds. If a game doesn't start at all, the wheel says so for a few seconds.
@@ -69,7 +69,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 
 **Options** (Exit → Options) change things on the spot and save them. A fresh install starts with the arc wheel, attract mode after 3 minutes idle (12 seconds per game), video volume 50, sound effects 30 and game audio 50.
 
-- Wheel Style (Arc, Cover Flow, Minimal or Vertical)
+- **Layout ›**, a submenu for how the wheel looks. *Template* picks Arc, Cover Flow, Minimal or Vertical and resets the rest to that template's values (the row says *(Changed)* once you've changed any of them). *Wheel Size* (60% to 150%), *Position* (Bottom, Left or Right), *Wheels Each Side* (0 to 5) and *Arc* (curve the row round a big wheel off the screen edge) can then be changed one by one. *Reset to Template* puts them back. A row that doesn't fit is squeezed rather than run off the screen.
 - **Attract Mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with video sound, sound effects and game audio, each on or off with its own volume (a volume only shows while its sound is on). Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
 - **DOF** on or off (off by default; see below)
@@ -106,7 +106,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 
 | Section | What's in it |
 |---|---|
-| `[wheel]` | `style`: `"arc"`, `"flow"`, `"minimal"` or `"vertical"` |
+| `[wheel]` | `style` (the layout template): `"arc"`, `"flow"`, `"minimal"` or `"vertical"`; `size` (60 to 150), `position` (`"bottom"`, `"left"`, `"right"`), `side_wheels` (0 to 5), `arc` (true/false), each defaulting to the template's value |
 | `[playfield]` | `ui_rotation`: turn the menu to face the player (default: Popper's own setting) |
 | `[input]` | Extra joystick buttons, whether buttons need focus, the Q quit key |
 | `[launch]` | Extra helper programs to ignore when deciding whether a game is still running |
@@ -182,7 +182,7 @@ crates/
     session.rs    a game session: launch, the Launching/Exiting screens, the exit button
     reload.rs     following database changes, keeping the keyboard focus
     library.rs    games and playlists as read from Popper
-    wheel.rs      the wheel styles: arc, cover flow, minimal and vertical
+    wheel.rs      the wheel layout (row of wheels, templates' looks), info text and menus
     video.rs      offscreen video targets and the cover-flow slide
     mpv.rs        minimal libmpv binding, loaded at run time
     assets.rs     background loading of wheel logos

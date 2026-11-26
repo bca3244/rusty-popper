@@ -2,6 +2,15 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.47] - 2026-11-26
+
+### Added
+- **Options → Layout**, replacing the Wheel Style row. *Template* (Arc, Cover Flow, Minimal or Vertical) sets everything below it; then *Wheel Size* (60% to 150%), *Position* (Bottom, Left or Right), *Wheels Each Side* (0 to 5) and *Arc* (on or off) can each be changed, and *Reset to Template* puts them back. Same settings on the phone's Settings page. W on a keyboard still cycles the templates.
+- Saved under `[wheel]` as `size`, `position`, `side_wheels` and `arc`. An older settings file with only `style` gets that template's layout, so nothing changes until you change it.
+
+### Changed
+- The four wheel styles are now drawn by one layout engine, so they can be mixed (a cover flow down the left side, a curved vertical list). They look as before, give or take a few pixels in spacing.
+
 ## [0.2.46] - 2026-11-26
 
 ### Changed

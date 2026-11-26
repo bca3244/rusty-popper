@@ -2,7 +2,12 @@
 //!
 //! ```toml
 //! [wheel]
-//! style = "arc"   # or "flow", "minimal" or "vertical"
+//! style = "arc"   # layout template: "arc", "flow", "minimal" or "vertical"
+//! # Options → Layout; each defaults to the template's value.
+//! # size = 80          # main wheel size, percent (60-150)
+//! # position = "bottom" # or "left", "right"
+//! # side_wheels = 2    # wheels shown each side of the main one (0-5)
+//! # arc = true         # curve the row of wheels
 //!
 //! [playfield]
 //! ui_rotation = 270   # default: Popper's ThumbRotate
@@ -99,10 +104,107 @@ impl WheelStyle {
     }
 }
 
+/// Where the row of wheels runs: along the bottom, or down one side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WheelPosition {
+    Bottom,
+    Left,
+    Right,
+}
+
+impl WheelPosition {
+    pub fn toggled(self) -> Self {
+        match self {
+            WheelPosition::Bottom => WheelPosition::Left,
+            WheelPosition::Left => WheelPosition::Right,
+            WheelPosition::Right => WheelPosition::Bottom,
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            WheelPosition::Bottom => "bottom",
+            WheelPosition::Left => "left",
+            WheelPosition::Right => "right",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            WheelPosition::Bottom => "Bottom",
+            WheelPosition::Left => "Left",
+            WheelPosition::Right => "Right",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "bottom" => Some(WheelPosition::Bottom),
+            "left" => Some(WheelPosition::Left),
+            "right" => Some(WheelPosition::Right),
+            _ => None,
+        }
+    }
+}
+
+/// Main wheel sizes (percent) that Options → Layout cycles through.
+pub const SIZE_CHOICES: &[u32] = &[60, 70, 80, 90, 100, 110, 120, 130, 140, 150];
+/// The most wheels shown on each side of the main one.
+pub const MAX_SIDE_WHEELS: u32 = 5;
+
+/// How the wheel is laid out (Options → Layout). A template (the wheel
+/// style) sets all of these; each can then be changed on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    /// Main wheel size, percent (one of SIZE_CHOICES).
+    pub size: u32,
+    pub position: WheelPosition,
+    /// Wheels shown on each side of the main one (0..=MAX_SIDE_WHEELS).
+    pub side_wheels: u32,
+    /// Whether the row of wheels curves (round a big wheel off the screen edge).
+    pub arc: bool,
+}
+
+impl WheelStyle {
+    /// The layout this style starts from.
+    pub fn template(self) -> Layout {
+        let (size, position, side_wheels, arc) = match self {
+            WheelStyle::Arc => (80, WheelPosition::Bottom, 2, true),
+            WheelStyle::Flow => (130, WheelPosition::Bottom, 2, false),
+            WheelStyle::Minimal => (120, WheelPosition::Bottom, 1, false),
+            WheelStyle::Vertical => (100, WheelPosition::Right, 3, false),
+        };
+        Layout { size, position, side_wheels, arc }
+    }
+}
+
+impl Layout {
+    /// A size from the file, snapped to the nearest choice.
+    fn snap_size(v: u32) -> u32 {
+        *SIZE_CHOICES.iter().min_by_key(|c| c.abs_diff(v)).unwrap()
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct WheelSettings {
+    /// The layout template.
     #[serde(default)]
     pub style: WheelStyle,
+    pub size: Option<u32>,
+    pub position: Option<WheelPosition>,
+    pub side_wheels: Option<u32>,
+    pub arc: Option<bool>,
+}
+
+impl WheelSettings {
+    /// The template's layout with any values the file sets.
+    pub fn layout(&self) -> Layout {
+        let t = self.style.template();
+        Layout {
+            size: self.size.map_or(t.size, Layout::snap_size),
+            position: self.position.unwrap_or(t.position),
+            side_wheels: self.side_wheels.map_or(t.side_wheels, |n| n.min(MAX_SIDE_WHEELS)),
+            arc: self.arc.unwrap_or(t.arc),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -358,6 +460,7 @@ impl Default for AudioSettings {
 /// Values the in-menu Options screen can change.
 pub struct Editable {
     pub style: WheelStyle,
+    pub layout: Layout,
     pub attract_enabled: bool,
     pub attract_idle_secs: u64,
     pub attract_interval_secs: u64,
@@ -385,6 +488,10 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
         doc[table][key] = value(val);
     };
     set("wheel", "style", v.style.key().into());
+    set("wheel", "size", (v.layout.size as i64).into());
+    set("wheel", "position", v.layout.position.key().into());
+    set("wheel", "side_wheels", (v.layout.side_wheels as i64).into());
+    set("wheel", "arc", v.layout.arc.into());
     set("attract", "enabled", v.attract_enabled.into());
     set("attract", "idle_secs", (v.attract_idle_secs as i64).into());
     set("attract", "interval_secs", (v.attract_interval_secs as i64).into());
@@ -476,11 +583,12 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
+        let v = Editable { style: WheelStyle::Flow, layout: Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, arc: true }, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
         assert_eq!(s.wheel.style, WheelStyle::Flow);
+        assert_eq!(s.wheel.layout(), Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, arc: true });
         assert_eq!(s.playfield.ui_rotation, Some(270));
         assert!(!s.attract.enabled);
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
@@ -495,6 +603,7 @@ mod tests {
         let v = Editable {
             video_sound: true,
             style: WheelStyle::Arc,
+            layout: WheelStyle::Arc.template(),
             attract_enabled: true,
             attract_idle_secs: 180,
             attract_interval_secs: 12,
@@ -517,12 +626,34 @@ mod tests {
         let mut style = WheelStyle::Arc;
         for _ in 0..4 {
             assert_eq!(WheelStyle::parse(style.key()), Some(style));
-            let v = Editable { style, attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
+            let v = Editable { style, layout: style.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
             let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap()).unwrap();
             assert_eq!(s.wheel.style, style);
+            assert_eq!(s.wheel.layout(), style.template());
             style = style.toggled();
         }
         assert_eq!(style, WheelStyle::Arc, "the Options cycle visits all four styles");
         assert_eq!(Settings::parse("[wheel]\nstyle = \"vertical\"\n").unwrap().wheel.style, WheelStyle::Vertical);
+    }
+
+    #[test]
+    fn layout_defaults_to_the_template() {
+        // An older file (style only) gets the template's layout.
+        let s = Settings::parse("[wheel]\nstyle = \"vertical\"\n").unwrap();
+        assert_eq!(s.wheel.layout(), WheelStyle::Vertical.template());
+        assert_eq!(s.wheel.layout().position, WheelPosition::Right);
+        // Values the file sets win; out-of-range ones are brought into range.
+        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"left\"\nside_wheels = 9\narc = false\n").unwrap();
+        assert_eq!(s.wheel.layout(), Layout { size: 130, position: WheelPosition::Left, side_wheels: MAX_SIDE_WHEELS, arc: false });
+        for t in [WheelStyle::Arc, WheelStyle::Flow, WheelStyle::Minimal, WheelStyle::Vertical] {
+            let l = t.template();
+            assert!(SIZE_CHOICES.contains(&l.size) && l.side_wheels <= MAX_SIDE_WHEELS);
+        }
+        let mut p = WheelPosition::Bottom;
+        for _ in 0..3 {
+            assert_eq!(WheelPosition::parse(p.key()), Some(p));
+            p = p.toggled();
+        }
+        assert_eq!(p, WheelPosition::Bottom);
     }
 }

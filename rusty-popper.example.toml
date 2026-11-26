@@ -2,7 +2,12 @@
 # Most of these can also be changed in the app: Exit -> Options.
 
 [wheel]
-style = "arc"          # "arc", "flow", "minimal" or "vertical"; W cycles at runtime
+style = "arc"          # layout template: "arc", "flow", "minimal" or "vertical"; W cycles at runtime
+# Options → Layout. Leave these out to use the template's values.
+# size = 80            # main wheel size, percent: 60 to 150 in steps of 10
+# position = "bottom"  # "bottom", "left" or "right"
+# side_wheels = 2      # wheels shown each side of the main one, 0 to 5
+# arc = true           # curve the row of wheels
 
 [playfield]
 # Degrees clockwise to turn the menu so it faces the player.
