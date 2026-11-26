@@ -8,7 +8,9 @@
 //! - each new selection: the last random event goes to 0 and a new random
 //!   `E901`-`E990` goes to 1 and stays there;
 //! - wheel prior / next: `E800` / `E801` pulsed (1, then 0 at once);
-//!   page next / prior: `E804` / `E805`;
+//!   page next / prior: `E804` / `E805`. Unlike Popper we pulse at most
+//!   once per [`PULSE_GAP`] (any of these events): a held flipper steps the
+//!   wheel up to ~28 times a second, and extra pulses are dropped, not queued;
 //! - game launch: `Finish()`, so the table's own DOF can use the hardware;
 //!   back from the game: `Init` again. Exit: `Finish()`.
 //!
@@ -20,7 +22,7 @@
 //! quietly (one line in the log).
 
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Popper's menu events (`E` + 799 + its button index).
 pub const PRIOR: u32 = 800;
@@ -31,6 +33,11 @@ pub const PAGE_PRIOR: u32 = 805;
 /// Popper picks `floor(random * 90) + 1 + 900`.
 const RANDOM_FIRST: u32 = 901;
 const RANDOM_COUNT: u32 = 90;
+
+/// The shortest time between two wheel/page pulses (of any event); ones
+/// sooner are dropped, so fast scrolling flashes the toys twice a second
+/// instead of hammering them (and DOF) on every step.
+const PULSE_GAP: Duration = Duration::from_millis(500);
 
 enum Cmd {
     /// Start a DOF session (if there isn't one).
@@ -50,11 +57,13 @@ pub struct Dof {
     /// A game (ours or another program's) is using the cabinet: no session.
     suspended: bool,
     tx: Option<Sender<Cmd>>,
+    /// When the last pulse was sent, for [`PULSE_GAP`].
+    last_pulse: Option<Instant>,
 }
 
 impl Dof {
     pub fn new(enabled: bool) -> Dof {
-        let mut d = Dof { enabled: false, suspended: false, tx: None };
+        let mut d = Dof { enabled: false, suspended: false, tx: None, last_pulse: None };
         d.set_enabled(enabled);
         d
     }
@@ -108,9 +117,10 @@ impl Dof {
         }
     }
 
-    /// One of Popper's menu events (`PRIOR`, `NEXT`, ...).
+    /// One of Popper's menu events (`PRIOR`, `NEXT`, ...), dropped if
+    /// another pulse went less than [`PULSE_GAP`] ago.
     pub fn pulse(&mut self, event: u32) {
-        if self.active() {
+        if self.active() && throttle(&mut self.last_pulse, Instant::now()) {
             self.send(Cmd::Pulse(event));
         }
     }
@@ -125,6 +135,16 @@ impl Dof {
             }
         }
     }
+}
+
+/// Whether a pulse may go at `now` (recording it if so): not if the last
+/// one went less than [`PULSE_GAP`] ago.
+fn throttle(last: &mut Option<Instant>, now: Instant) -> bool {
+    if last.is_some_and(|at| now.saturating_duration_since(at) < PULSE_GAP) {
+        return false;
+    }
+    *last = Some(now);
+    true
 }
 
 fn worker(rx: Receiver<Cmd>) {
@@ -323,6 +343,21 @@ mod tests {
         d.suspend(true);
         d.suspend(false);
         assert!(d.tx.is_none());
+    }
+
+    #[test]
+    fn pulses_are_throttled() {
+        let mut last = None;
+        let t = Instant::now();
+        let ms = Duration::from_millis;
+        assert!(throttle(&mut last, t));
+        assert!(!throttle(&mut last, t + ms(35)));
+        assert!(!throttle(&mut last, t + PULSE_GAP - ms(1)));
+        assert!(throttle(&mut last, t + PULSE_GAP));
+        assert!(!throttle(&mut last, t + PULSE_GAP + ms(100)));
+        // Held flipper at 35 ms steps for 2 s: 4 pulses, i.e. two a second.
+        let mut last = None;
+        assert_eq!((0..58).filter(|i| throttle(&mut last, t + ms(35 * i))).count(), 4);
     }
 
     /// On a cabinet: `cargo test -p rusty-popper dof_objects -- --ignored --nocapture`
