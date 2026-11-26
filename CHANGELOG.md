@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.49] - 2026-11-26
+
+### Changed
+- Phone remote: each section of the Settings page (Layout, Attract Mode, Sound, Cabinet, Updates) is now its own card with a copper header strip, and the rows inside are separated by thin lines, so the sections are easier to tell apart. The Real-time Performance page (CPU, GPU, Disks) gets the same look.
+
 ## [0.2.48] - 2026-11-26
 
 ### Fixed
