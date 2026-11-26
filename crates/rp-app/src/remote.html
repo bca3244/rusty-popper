@@ -140,8 +140,6 @@ function show(s) {
   $("facts").replaceChildren();
   if (g) {
     fact("System", g.emulator);
-    fact("ROM", g.rom);
-    fact("File", g.file);
     fact("Tags", g.tags && g.tags.length ? g.tags : null);
   }
   if (s.image !== imageShown) {
