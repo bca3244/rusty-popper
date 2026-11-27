@@ -50,7 +50,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use rp_config::{self as config, Screen, Slot};
 use rp_db as db;
 use settings::{Layout, Settings, WheelPosition, WheelStyle};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -87,9 +87,11 @@ const MIN_FRAME: Duration = Duration::from_millis(4);
 /// This long after the last button press the menu counts as still (its
 /// animations are over), and draws only when the video has a new frame.
 const STILL_AFTER: Duration = Duration::from_millis(1200);
-/// While the menu is still, how often to look for a new video frame or input.
-const STILL_POLL: Duration = Duration::from_millis(2);
-/// Time per frame for turning loaded logos into textures.
+/// While the menu is still, how often to look at the joysticks (and the rest
+/// of the housekeeping). A new video frame or a key wakes the loop at once.
+const STILL_POLL: Duration = Duration::from_millis(7);
+/// Time per frame for turning loaded logos into textures while the menu is
+/// still. While it moves, one logo per frame at most, so a frame never runs long.
 const LOGO_UPLOAD_BUDGET: Duration = Duration::from_millis(3);
 /// A secondary screen with nothing new is still redrawn this often.
 const REDRAW_EVERY: Duration = Duration::from_secs(1);
@@ -418,9 +420,11 @@ fn run() -> Result<()> {
     let volume = settings.audio.volume.unwrap_or_else(|| screens.iter().find(|s| s.slot == Slot::PlayField).map_or(100, |s| s.volume)).clamp(0, 100);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
+    let waker = Arc::new(Waker { proxy: std::sync::Mutex::new(event_loop.create_proxy()), pending: AtomicBool::new(false), frames: AtomicBool::new(true) });
     let now = Instant::now();
     let game_audio = gameaudio::GameAudio::new(&mpv, settings.sound.game_audio, settings.sound.game_audio_volume);
     let mut app = App {
+        waker,
         game_audio,
         dof: dof::Dof::new(settings.dof.enabled, settings.dof.rate_cap_ms),
         dof_shown: None,
@@ -558,6 +562,44 @@ struct Aside {
     visible: Vec<bool>,
 }
 
+/// Wakes the event loop from another thread (mpv's frame callbacks, the
+/// game thread), so a still menu can sleep instead of polling.
+pub(crate) struct Waker {
+    proxy: std::sync::Mutex<winit::event_loop::EventLoopProxy<()>>,
+    /// A wake-up is already on its way: no need to post another.
+    pending: AtomicBool,
+    /// Whether new video frames wake the loop: not during a game, when
+    /// the loop keeps its own slow beat behind the table.
+    frames: AtomicBool,
+}
+
+impl Waker {
+    /// A player has a new frame.
+    pub(crate) fn frame_ready(&self) {
+        if self.frames.load(Ordering::Acquire) {
+            self.wake();
+        }
+    }
+
+    pub(crate) fn wake_on_frames(&self, on: bool) {
+        self.frames.store(on, Ordering::Release);
+    }
+
+    pub(crate) fn wake(&self) {
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            if let Ok(p) = self.proxy.lock() {
+                let _ = p.send_event(());
+            }
+        }
+    }
+
+    /// Call as a frame starts, before it looks at what's new: a wake-up
+    /// asked for after this is posted again.
+    fn woken(&self) {
+        self.pending.store(false, Ordering::Release);
+    }
+}
+
 /// One cabinet screen: its window, GL surface and mpv player.
 struct ScreenOut {
     screen: Screen,
@@ -588,6 +630,12 @@ struct ScreenOut {
     drawn_at: Cell<Instant>,
     /// Whether a card was on this screen last frame.
     had_card: Cell<bool>,
+    /// The file the last `show` asked for, and when.
+    loaded: RefCell<Option<(PathBuf, SystemTime)>>,
+    /// The file stopped (failed or was replaced) since it was opened.
+    ended: Cell<bool>,
+    /// Video decoding was turned off for a game (the launch screen covers it).
+    vid_off: Cell<bool>,
 }
 
 impl ScreenOut {
@@ -601,8 +649,32 @@ impl ScreenOut {
         }
     }
 
+    /// After a game: carries on with `media` if it is the file already open
+    /// (paused behind the game) and unchanged since, instead of opening it
+    /// again; otherwise shows it afresh.
+    fn resume(&self, media: Option<&Path>) {
+        let open = media.is_some_and(|m| {
+            let loaded = self.loaded.borrow();
+            let Some((path, at)) = loaded.as_ref().filter(|(p, _)| p == m) else { return false };
+            // Replaced or changed while the game ran (a media recorder, say):
+            // open it again. A copied-in file keeps its old modified time but
+            // is created anew.
+            let unchanged = std::fs::metadata(path).is_ok_and(|md| [md.modified(), md.created()].into_iter().all(|t| t.is_ok_and(|t| t <= *at)));
+            self.file_loaded.get() && !self.ended.get() && unchanged
+        });
+        if open {
+            self.dirty.set(true);
+            if self.screen.slot != Slot::PlayField {
+                self.window.set_visible(true);
+            }
+        } else {
+            self.show(media);
+        }
+    }
+
     /// Plays `media` without showing or hiding the window.
     fn load(&self, media: Option<&Path>) {
+        *self.loaded.borrow_mut() = media.map(|m| (m.to_path_buf(), SystemTime::now()));
         self.file_loaded.set(false);
         self.load_acked.set(false);
         self.dirty.set(true);
@@ -626,11 +698,16 @@ impl ScreenOut {
                 mpv::EVENT_COMMAND_REPLY if tag != 0 && tag == self.load_tag.get() => self.load_acked.set(true),
                 mpv::EVENT_FILE_LOADED if self.load_acked.get() => {
                     self.file_loaded.set(true);
+                    self.ended.set(false);
                     self.dirty.set(true);
                 }
                 // Draw once more even without a new frame, so a stopped or
                 // reconfigured video doesn't leave its last picture up.
-                mpv::EVENT_END_FILE | mpv::EVENT_VIDEO_RECONFIG => self.dirty.set(true),
+                mpv::EVENT_END_FILE => {
+                    self.ended.set(true);
+                    self.dirty.set(true);
+                }
+                mpv::EVENT_VIDEO_RECONFIG => self.dirty.set(true),
                 mpv::EVENT_PLAYBACK_RESTART if self.file_loaded.get() => {
                     if let Some(s) = self.slide.as_mut() {
                         s.video_ready();
@@ -685,6 +762,9 @@ struct Gfx {
     revealed: bool,
     /// The phone remote's QR code texture, while the remote is on.
     qr: Option<Qr>,
+    /// Whether a screen's video can be copied to its window as it is
+    /// (not on a multisampled window).
+    blit_ok: bool,
 }
 
 /// The phone remote's QR code, as uploaded for drawing.
@@ -816,6 +896,9 @@ struct Playing {
     /// When the Exit button first asked the game to close.
     stop_pressed: Option<Instant>,
     last_render: Option<Instant>,
+    /// What the last launch screen showed (phase, "Launching"): once the
+    /// table covers it, it is only drawn again when that changes.
+    drawn: Option<(rp_launch::Phase, bool)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -857,6 +940,8 @@ fn power(flag: &str) -> Result<()> {
 }
 
 struct App {
+    /// Wakes the event loop when a player has a new frame or a game ends.
+    waker: Arc<Waker>,
     mpv: mpv::Mpv,
     screens: Vec<Screen>,
     /// Popper's GameInfo / GameHelp screen rectangles, if configured.

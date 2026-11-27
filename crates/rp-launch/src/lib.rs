@@ -52,8 +52,12 @@ const KILL_AFTER: Duration = Duration::from_secs(20);
 /// The same, when the emulator has no post script to close it.
 const KILL_AFTER_NO_SCRIPT: Duration = Duration::from_secs(2);
 /// How often the whole process list is rescanned while a game runs (in
-/// between, only the known game processes are checked).
+/// between, only the known game processes are checked): often while the
+/// table loads, when new processes (and their windows) matter to the menu.
 const FULL_SCAN_EVERY: Duration = Duration::from_secs(2);
+/// The same once the game has run this long.
+const FULL_SCAN_SETTLED_AFTER: Duration = Duration::from_secs(120);
+const FULL_SCAN_EVERY_SETTLED: Duration = Duration::from_secs(10);
 /// The longest a post (close) script may run before it is ended.
 const POST_SCRIPT_LIMIT: Duration = Duration::from_secs(30);
 /// After the game's processes were killed, how long to wait for them to go
@@ -199,7 +203,8 @@ impl Script {
                 self.end();
                 return;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            // Wakes as soon as the script exits.
+            wait_for_child(&self.child, Duration::from_millis(100));
         }
     }
 
@@ -213,6 +218,105 @@ impl Script {
         let _ = self.child.wait();
         self.ran = Some(self.started.elapsed());
         let _ = std::fs::remove_file(&self.bat);
+    }
+}
+
+/// Sleeps up to `timeout`, waking early when `child` exits.
+fn wait_for_child(child: &Child, timeout: Duration) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(child.as_raw_handle(), timeout.as_millis() as u32) };
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = child;
+        std::thread::sleep(timeout);
+    }
+}
+
+/// Process handles of the game, to see the moment one exits instead of
+/// asking for the process list a few times a second.
+#[derive(Default)]
+struct ExitWatch {
+    #[cfg(windows)]
+    handles: Vec<(u32, windows_sys::Win32::Foundation::HANDLE)>,
+    /// Every followed process has a handle (otherwise the caller polls).
+    complete: bool,
+}
+
+impl ExitWatch {
+    /// Follows exactly `pids`: opens the new ones, lets go of the others.
+    fn follow(&mut self, pids: &[u32]) {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+            self.handles.retain(|&(pid, h)| {
+                let keep = pids.contains(&pid);
+                if !keep {
+                    unsafe { CloseHandle(h) };
+                }
+                keep
+            });
+            self.complete = true;
+            for &pid in pids {
+                if self.handles.iter().any(|&(p, _)| p == pid) {
+                    continue;
+                }
+                let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                if h.is_null() {
+                    self.complete = false;
+                } else {
+                    self.handles.push((pid, h));
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = pids;
+            self.complete = false;
+        }
+    }
+
+    /// The followed processes that have exited (no longer followed).
+    fn exited(&mut self) -> Vec<u32> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+            use windows_sys::Win32::System::Threading::WaitForSingleObject;
+            let mut gone = Vec::new();
+            self.handles.retain(|&(pid, h)| {
+                let running = unsafe { WaitForSingleObject(h, 0) } == WAIT_TIMEOUT;
+                if !running {
+                    unsafe { CloseHandle(h) };
+                    gone.push(pid);
+                }
+                running
+            });
+            gone
+        }
+        #[cfg(not(windows))]
+        Vec::new()
+    }
+
+    /// Sleeps up to `timeout`, waking early when a followed process exits.
+    fn wait(&self, timeout: Duration) {
+        #[cfg(windows)]
+        if !self.handles.is_empty() {
+            use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
+            // At most 64 handles in one wait; more than that is no game.
+            let hs: Vec<_> = self.handles.iter().take(64).map(|&(_, h)| h).collect();
+            unsafe { WaitForMultipleObjects(hs.len() as u32, hs.as_ptr(), 0, timeout.as_millis() as u32) };
+            return;
+        }
+        std::thread::sleep(timeout);
+    }
+}
+
+impl Drop for ExitWatch {
+    fn drop(&mut self) {
+        self.follow(&[]);
     }
 }
 
@@ -388,12 +492,14 @@ struct Tracker {
     /// Only processes started at or after this time (Unix seconds) count.
     since: u64,
     known: Vec<Pid>,
+    /// Handles of the `known` processes.
+    watch: ExitWatch,
 }
 
 impl Tracker {
     fn new(matcher: Matcher, since: u64) -> Self {
         let sys = System::new().map_err(|e| log::warn!("can't list processes: {e}")).ok();
-        Tracker { sys, matcher, since, known: Vec::new() }
+        Tracker { sys, matcher, since, known: Vec::new(), watch: ExitWatch::default() }
     }
 
     fn can_track(&self) -> bool {
@@ -430,11 +536,17 @@ impl Tracker {
                 names.push(name.to_lowercase());
             }
         }
+        self.watch.follow(&self.known.iter().map(|p| p.as_u32()).collect::<Vec<_>>());
         names
     }
 
     /// Cheap check that some already-known game process is still alive.
     fn known_alive(&mut self) -> bool {
+        if self.watch.complete {
+            let gone = self.watch.exited();
+            self.known.retain(|pid| !gone.contains(&pid.as_u32()));
+            return !self.known.is_empty();
+        }
         let Some(sys) = self.sys.as_mut() else { return false };
         sys.refresh_processes_specifics(ProcessesToUpdate::Some(&self.known), true, ProcessRefreshKind::nothing());
         self.known.retain(|pid| sys.process(*pid).is_some());
@@ -671,7 +783,8 @@ impl LaunchJob {
             }
             // Mostly just check the processes already found; rescan everything
             // now and then (new child processes) and before believing it's over.
-            let alive = if gone_since.is_none() && last_full.elapsed() < FULL_SCAN_EVERY && tracker.known_alive() {
+            let full_every = if played.elapsed() < FULL_SCAN_SETTLED_AFTER { FULL_SCAN_EVERY } else { FULL_SCAN_EVERY_SETTLED };
+            let alive = if gone_since.is_none() && last_full.elapsed() < full_every && tracker.known_alive() {
                 true
             } else {
                 last_full = Instant::now();
@@ -686,8 +799,9 @@ impl LaunchJob {
                 log::info!("Game processes gone; returning to the menu");
                 break;
             }
-            // Poll faster once everything looks gone, so the exit is noticed quickly.
-            std::thread::sleep(Duration::from_millis(if gone_since.is_some() { 75 } else { 250 }));
+            // Poll faster once everything looks gone, so the exit is noticed
+            // quickly; while the game runs, its exit ends the wait at once.
+            tracker.watch.wait(Duration::from_millis(if gone_since.is_some() { 75 } else { 250 }));
         }
         (Outcome::Finished { secs: played.elapsed().as_secs() }, stop_at.is_some())
     }

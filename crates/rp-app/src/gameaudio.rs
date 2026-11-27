@@ -11,20 +11,22 @@ use std::time::{Duration, Instant};
 /// How long the wheel must rest on a game before its audio starts.
 const DWELL: Duration = Duration::from_millis(900);
 
-const AUDIO_EXTS: &[&str] = &["mp3", "ogg", "wav", "m4a", "flac", "aac", "wma"];
+pub const AUDIO_EXTS: &[&str] = &["mp3", "ogg", "wav", "m4a", "flac", "aac", "wma"];
 
 /// `<media dir>\Audio\<name>.<ext>`, if there is one.
 pub fn find(media_dir: &Path, name: &str) -> Option<PathBuf> {
     if name.is_empty() {
         return None;
     }
-    let dir = media_dir.join("Audio");
-    AUDIO_EXTS.iter().map(|ext| dir.join(format!("{name}.{ext}"))).find(|p| p.is_file())
+    rp_config::find_in(media_dir, "Audio", name, AUDIO_EXTS)
 }
 
 pub struct GameAudio {
-    /// An audio-only mpv player (None if it couldn't be created).
+    mpv: mpv::Mpv,
+    /// An audio-only mpv player, made the first time game audio is on.
     player: Option<mpv::Player>,
+    /// Making the player failed: game audio stays silent.
+    failed: bool,
     pub enabled: bool,
     /// 0..=100.
     pub volume: i32,
@@ -37,16 +39,32 @@ pub struct GameAudio {
 
 impl GameAudio {
     pub fn new(mpv: &mpv::Mpv, enabled: bool, volume: i32) -> GameAudio {
-        let volume = volume.clamp(0, 100);
+        let mut a = GameAudio { mpv: mpv.clone(), player: None, failed: false, enabled, volume: volume.clamp(0, 100), want: None, tried: false, playing: false };
+        // A player costs a thread and memory: none while game audio is off.
+        if enabled {
+            a.make_player();
+        }
+        a
+    }
+
+    fn make_player(&mut self) {
+        if self.player.is_some() || self.failed {
+            return;
+        }
         let opts = [
             ("vo", "null".to_string()),
             ("vid", "no".to_string()),
             ("audio-display", "no".to_string()),
             ("loop-file", "inf".to_string()),
-            ("volume", volume.to_string()),
+            ("volume", self.volume.to_string()),
         ];
-        let player = mpv.player(&opts, &[("sub-auto", "no"), ("cover-art-auto", "no")]).map_err(|e| log::warn!("Game audio player: {e:#}; game audio off")).ok();
-        GameAudio { player, enabled, volume, want: None, tried: false, playing: false }
+        match self.mpv.player(&opts, &[("sub-auto", "no"), ("cover-art-auto", "no")]) {
+            Ok(p) => self.player = Some(p),
+            Err(e) => {
+                log::warn!("Game audio player: {e:#}; game audio off");
+                self.failed = true;
+            }
+        }
     }
 
     /// Called every frame with the item the wheel is on (None: nothing should
@@ -105,6 +123,9 @@ impl GameAudio {
     /// Turns it on or off; when turned back on, the current game's audio starts.
     pub fn set_enabled(&mut self, on: bool) {
         self.enabled = on;
+        if on {
+            self.make_player();
+        }
         self.stop();
         self.want = None;
         self.tried = false;

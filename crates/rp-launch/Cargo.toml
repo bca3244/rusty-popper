@@ -11,3 +11,6 @@ anyhow = "1.0.104"
 rp-db.workspace = true
 log = "0.4"
 sysinfo = "0.40.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }

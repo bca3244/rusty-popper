@@ -5,8 +5,10 @@
 //! [`StatsWriter`], which backs the DB up first.
 
 use anyhow::{Context, Result};
+use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Emulator {
@@ -119,16 +121,34 @@ static COPY_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 /// Prefix of the temp files this crate creates, for cleaning up stale ones.
 pub const TEMP_PREFIX: &str = "rusty-popper-";
 
-/// Consistent snapshot of the live DB at `dest` (VACUUM INTO waits for any
-/// writer instead of copying a half-written file).
+/// How long a snapshot waits for a writer to finish with the live DB.
+const SNAPSHOT_WAIT: Duration = Duration::from_secs(5);
+
+/// Consistent snapshot of the live DB at `dest`, never a half-written file.
+/// SQLite's backup copies every page in one step, under one read
+/// transaction (so after any writer is done, and with no write in between),
+/// as VACUUM INTO did, but without rebuilding every table and index.
 fn snapshot(live: &Path, dest: &Path) -> Result<()> {
     let _ = std::fs::remove_file(dest);
-    let conn = Connection::open_with_flags(live, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let what = || format!("snapshotting {} to {}", live.display(), dest.display());
+    let src = Connection::open_with_flags(live, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("opening {}", live.display()))?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    conn.execute("VACUUM INTO ?1", [dest.to_string_lossy()])
-        .with_context(|| format!("snapshotting {} to {}", live.display(), dest.display()))?;
-    Ok(())
+    src.busy_timeout(SNAPSHOT_WAIT)?;
+    let mut dst = Connection::open(dest).with_context(what)?;
+    // A throwaway copy: no journal, no waiting for the disk.
+    dst.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;").with_context(what)?;
+    let backup = Backup::new(&src, &mut dst).with_context(what)?;
+    let deadline = Instant::now() + SNAPSHOT_WAIT;
+    loop {
+        match backup.step(-1).with_context(what)? {
+            StepResult::Done => return Ok(()),
+            // A writer holds the file: wait for it, as a reader would.
+            StepResult::Busy | StepResult::Locked if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            StepResult::Busy | StepResult::Locked => anyhow::bail!("{}: the database stayed busy", what()),
+            // More (not with -1) or anything newer: step again.
+            _ => {}
+        }
+    }
 }
 
 impl PopperDb {
@@ -513,6 +533,36 @@ mod tests {
         )
         .unwrap();
         live
+    }
+
+    #[test]
+    fn snapshot_waits_for_a_writer_and_sees_its_commit() {
+        let dir = std::env::temp_dir().join(format!("rp-db-snap-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = popper_like_db(&dir);
+        // A writer holds the file mid-change for a moment.
+        let (locked, is_locked) = std::sync::mpsc::channel();
+        let path = live.clone();
+        let writer = std::thread::spawn(move || {
+            let mut w = Connection::open(&path).unwrap();
+            let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive).unwrap();
+            tx.execute("UPDATE Games SET GameDisplay = 'Changed' WHERE GameID = 2", []).unwrap();
+            locked.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            tx.commit().unwrap();
+        });
+        is_locked.recv().unwrap();
+        let dest = dir.join("snap.db");
+        snapshot(&live, &dest).unwrap();
+        writer.join().unwrap();
+        let c = Connection::open(&dest).unwrap();
+        let shown: String = c.query_row("SELECT GameDisplay FROM Games WHERE GameID = 2", [], |r| r.get(0)).unwrap();
+        assert_eq!(shown, "Changed");
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM PlayListDetails", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 3);
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

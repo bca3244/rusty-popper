@@ -149,10 +149,23 @@ impl App {
             _ => Duration::from_millis(33),
         };
         el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + render_every.min(PLAY_POLL)));
+        // Once the table covers the playfield, nothing behind it changes
+        // until the phase does: no redraws (only the events are read).
+        let shown = (phase, launching);
+        let covered = phase == Phase::Playing && p.table_up && !p.kept_video;
+        if covered && p.drawn == Some(shown) {
+            if let Some(g) = self.gfx.as_mut() {
+                for o in g.outs.iter_mut() {
+                    o.pump_events();
+                }
+            }
+            return Ok(());
+        }
         if p.last_render.is_some_and(|at| at.elapsed() + Duration::from_millis(5) < render_every) {
             return Ok(());
         }
         p.last_render = Some(Instant::now());
+        p.drawn = Some(shown);
         let index = p.index;
         self.render_launching(index, phase, launching, t)
     }
@@ -193,6 +206,7 @@ impl App {
         let worker_ctl = ctl.clone();
         let stats = self.stats.clone();
         let game_id = game.id;
+        let waker = self.waker.clone();
         let spawned = std::thread::Builder::new().name("game".into()).spawn(move || {
             // Our DOF session must be over before the table opens its own
             // (it may still be starting up: Init takes a second or two).
@@ -214,6 +228,8 @@ impl App {
                 _ => {}
             }
             let _ = tx.send(result);
+            // Back to the menu now, not at its next look.
+            waker.wake();
         });
         if let Err(e) = spawned {
             // Nothing is running: undo what was set up for the game.
@@ -228,8 +244,12 @@ impl App {
         // The launch screen covers the playfield video: stop decoding it so
         // the table loads faster (its audio keeps playing).
         if let Some(pf) = self.gfx.as_ref().map(|g| &g.outs[0]).filter(|o| !emu.keep_displays.contains(&(o.screen.slot as u32))) {
-            let _ = pf.player.command_async(&["set", "vid", "no"]);
+            if pf.player.command_async(&["set", "vid", "no"]).is_ok() {
+                pf.vid_off.set(true);
+            }
         }
+        // Behind the table the loop keeps its own slow beat.
+        self.waker.wake_on_frames(false);
         self.playing = Some(Playing {
             rx,
             ctl,
@@ -244,6 +264,7 @@ impl App {
             logos_released: false,
             last_render: None,
             stop_pressed: None,
+            drawn: None,
         });
     }
 
@@ -275,6 +296,7 @@ impl App {
     /// `take_focus`) the keyboard focus, even from another program.
     pub(crate) fn return_from_game(&mut self, el: &ActiveEventLoop, take_focus: bool) {
         self.playing = None;
+        self.waker.wake_on_frames(true);
         // Play statistics recorded without a backup of Popper's database: say so once.
         if let Some(why) = self.stats.lock().ok().and_then(|mut s| s.take_warning()) {
             self.notice = Some((why, Instant::now()));
@@ -302,10 +324,14 @@ impl App {
         for o in g.outs.iter_mut() {
             o.slide = None;
             let _ = o.player.set_pause(false);
-            if o.screen.slot == Slot::PlayField {
+            let media = item.media(o.screen.slot);
+            if o.vid_off.replace(false) {
                 let _ = o.player.command_async(&["set", "vid", "auto"]);
+                o.show(media.as_deref());
+            } else {
+                // Still open and paused behind the game: just carry on.
+                o.resume(media.as_deref());
             }
-            o.show(item.media(o.screen.slot).as_deref());
         }
         g.load_logos(&self.lib.items, g.shown);
         if take_focus {

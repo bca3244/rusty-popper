@@ -2,6 +2,20 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.57] - 2026-11-26
+
+### Changed
+- The menu uses much less CPU while it sits still: instead of checking for a new video frame 500 times a second, it now sleeps until a video has one (and still looks at the joysticks every 7 ms).
+- Scrolling stays smoother while wheel logos are still loading: at most one logo is added per frame while the wheel moves. A logo that finishes loading on a resting wheel now shows straight away.
+- Finding each game's videos and images no longer checks the disk for every file type on every move: each media folder is read once when the database is read.
+- Back from a game, the menu notices the table has closed sooner, and the backglass, DMD and topper carry on with the video they had instead of starting it again.
+- While a table runs, the screens behind it are no longer redrawn every second, the joysticks are no longer rescanned, and the list of running programs is read less often after the first two minutes.
+- Videos are scaled with mpv's plain (bilinear) filters, which cost far less at 4K.
+- mpv no longer loads its built-in scripts (stats, console, YouTube support) in every player.
+- Faster start: the video players start side by side, the first joystick scan no longer holds up the menu, the database snapshot is a quick page copy instead of a rebuild, and the game audio player is only started once Game Audio is on.
+- Cover flow draws the far covers with fewer slices, and only sets aside video memory for its slide once it first slides.
+- The backglass, DMD and topper videos are copied straight to their screens when there's nothing to draw over them.
+
 ## [0.2.56] - 2026-11-26
 
 ### Fixed

@@ -195,6 +195,8 @@ pub struct Joysticks {
     exit_down: bool,
     /// A rescan running on a helper thread.
     scanning: Option<std::sync::mpsc::Receiver<Vec<u32>>>,
+    /// Whether a scan has finished yet (the first runs while the menu starts).
+    scanned: bool,
 }
 
 /// The winmm joystick ids that answer.
@@ -279,11 +281,10 @@ impl KeyRepeat {
 }
 
 impl Joysticks {
+    /// Starts the first scan on a helper thread; buttons work once it's done.
     pub fn new() -> Self {
-        let mut j = Joysticks { ids: Vec::new(), last_scan: Instant::now(), held: Vec::new(), exit_down: false, scanning: None };
-        let t = Instant::now();
-        j.ids = scan_ids();
-        crate::perf::note("Joystick scan", t, 5);
+        let mut j = Joysticks { ids: Vec::new(), last_scan: Instant::now(), held: Vec::new(), exit_down: false, scanning: None, scanned: false };
+        j.start_scan();
         j
     }
 
@@ -295,10 +296,6 @@ impl Joysticks {
         (unsafe { joyGetPosEx(id, &mut info) } == 0).then_some(info.dwButtons)
     }
 
-
-    pub fn count(&self) -> usize {
-        self.ids.len()
-    }
 
     /// Marks every bound button that is down right now as already handled,
     /// so it only fires again after being released.
@@ -318,13 +315,26 @@ impl Joysticks {
     /// Looks for joysticks again now and then, on a helper thread: asking
     /// winmm about absent ids can stall, and that mustn't hold up a frame.
     fn rescan_if_due(&mut self) {
+        if self.collect_scan() {
+            return;
+        }
+        let every = if self.ids.is_empty() { SCAN_EVERY_NONE } else { SCAN_EVERY_SOME };
+        if self.last_scan.elapsed() > every {
+            self.start_scan();
+        }
+    }
+
+    /// Takes the result of a scan that has finished. True while one is
+    /// still running (or just finished).
+    fn collect_scan(&mut self) -> bool {
         if let Some(rx) = &self.scanning {
             match rx.try_recv() {
                 Ok(ids) => {
-                    if ids != self.ids {
+                    if ids != self.ids || !self.scanned {
                         log::info!("Joysticks found: {}", ids.len());
                     }
                     self.ids = ids;
+                    self.scanned = true;
                     self.scanning = None;
                     self.last_scan = Instant::now();
                 }
@@ -334,21 +344,22 @@ impl Joysticks {
                     self.last_scan = Instant::now();
                 }
             }
-            return;
+            return true;
         }
-        let every = if self.ids.is_empty() { SCAN_EVERY_NONE } else { SCAN_EVERY_SOME };
-        if self.last_scan.elapsed() > every {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let spawned = std::thread::Builder::new().name("joystick-scan".into()).spawn(move || {
-                let t = Instant::now();
-                let ids = scan_ids();
-                crate::perf::note("Joystick scan", t, 5);
-                let _ = tx.send(ids);
-            });
-            match spawned {
-                Ok(_) => self.scanning = Some(rx),
-                Err(_) => self.last_scan = Instant::now(),
-            }
+        false
+    }
+
+    fn start_scan(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("joystick-scan".into()).spawn(move || {
+            let t = Instant::now();
+            let ids = scan_ids();
+            crate::perf::note("Joystick scan", t, 5);
+            let _ = tx.send(ids);
+        });
+        match spawned {
+            Ok(_) => self.scanning = Some(rx),
+            Err(_) => self.last_scan = Instant::now(),
         }
     }
 
@@ -369,12 +380,14 @@ impl Joysticks {
     }
 
     /// While a game runs: true when an "Exit Emulators" button or key has
-    /// just been pressed. Works whichever window has the focus.
+    /// just been pressed. Works whichever window has the focus. No rescans
+    /// meanwhile: asking winmm about absent ids can stall the table too.
     pub fn exit_pressed(&mut self, bindings: &Bindings) -> bool {
         if bindings.exit_joy.is_empty() && bindings.exit_keys.is_empty() {
             return false;
         }
-        self.rescan_if_due();
+        // Only one already under way (the first, if the menu never had the focus).
+        self.collect_scan();
         let down = self.exit_down_now(bindings);
         let pressed = down && !self.exit_down;
         self.exit_down = down;
