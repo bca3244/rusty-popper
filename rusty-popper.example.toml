@@ -68,6 +68,10 @@ style = "arc"          # layout template: "arc", "flow", "minimal" or "vertical"
 # "PinUP Menu" table (ROM pinupmenu), like Popper's menu. Off by default.
 # Also in the app: Exit -> Options.
 # enabled = false
+# Rate Cap: the fewest milliseconds between two wheel/page pulses, so holding
+# a flipper doesn't fire the toys on every step. 0 (off) to 500;
+# Options -> DOF.
+# rate_cap_ms = 200
 
 [remote]
 # Phone remote: a small web page on your home network (what's playing; exit,

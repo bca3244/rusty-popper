@@ -346,7 +346,7 @@ fn run() -> Result<()> {
     let game_audio = gameaudio::GameAudio::new(&mpv, settings.sound.game_audio, settings.sound.game_audio_volume);
     let mut app = App {
         game_audio,
-        dof: dof::Dof::new(settings.dof.enabled),
+        dof: dof::Dof::new(settings.dof.enabled, settings.dof.rate_cap_ms),
         dof_shown: None,
         mpv,
         screens,
@@ -630,9 +630,9 @@ const EXIT_MENU: &[&str] = &["Back to Games", "Options", "Exit Rusty Popper", "R
 /// Choices the Options screen cycles through with Start.
 const ATTRACT_IDLE_CHOICES: &[u64] = &[60, 120, 180, 300, 600];
 const ATTRACT_INTERVAL_CHOICES: &[u64] = &[6, 12, 20, 30];
-const OPTION_ROWS: usize = 7; // layout, attract, sound (submenus), DOF, phone remote, update, back
+const OPTION_ROWS: usize = 7; // layout, attract, sound, DOF (submenus), phone remote, update, back
 /// The Options rows, in the order `option_labels` lists them (Back is last).
-/// The rows that open the Layout, Attract mode and Sound submenus.
+/// The rows that open the Layout, Attract mode, Sound and DOF submenus.
 const LAYOUT_ROW: usize = 0;
 const ATTRACT_ROW: usize = 1;
 const SOUND_ROW: usize = 2;
@@ -646,6 +646,14 @@ enum AttractRow {
     Toggle,
     StartsAfter,
     TimePerGame,
+    Back,
+}
+
+/// The rows of Options → DOF (see `App::dof_rows`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DofRow {
+    Toggle,
+    RateCap,
     Back,
 }
 
@@ -717,6 +725,8 @@ enum MenuKind {
     Sound,
     /// Options → Layout: the wheel's template, size, position, side wheels and arc.
     Layout,
+    /// Options → DOF: on/off and its Rate Cap.
+    Dof,
 }
 
 struct ExitMenu {

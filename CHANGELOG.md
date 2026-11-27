@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.54] - 2026-11-26
+
+### Added
+- **Options → DOF** is now a submenu: *DOF* (on or off) and, while it's on, **Rate Cap**: the fewest milliseconds between two wheel or page pulses, from Off (every step pulses) to 500 ms in 50 ms steps. Default 200 ms, as in v0.2.53. Also on the phone's Settings page. Saved as `rate_cap_ms` under `[dof]`.
+
 ## [0.2.53] - 2026-11-26
 
 ### Changed

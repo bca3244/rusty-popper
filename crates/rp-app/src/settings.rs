@@ -379,11 +379,24 @@ impl Default for AttractSettings {
 
 /// `[dof]`: light the cabinet's toys from the menu with DOF, using the DOF
 /// Config Tool's "PinUP Menu" table (ROM pinupmenu), as Popper's menu does.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct DofSettings {
     /// Off unless turned on (Options or here).
     #[serde(default)]
     pub enabled: bool,
+    /// Rate Cap: the fewest ms between two wheel/page pulses (0 = off, up to 500).
+    #[serde(default = "default_rate_cap")]
+    pub rate_cap_ms: u64,
+}
+
+fn default_rate_cap() -> u64 {
+    crate::dof::DEFAULT_RATE_CAP_MS
+}
+
+impl Default for DofSettings {
+    fn default() -> Self {
+        DofSettings { enabled: false, rate_cap_ms: default_rate_cap() }
+    }
 }
 
 /// `[remote]`: the phone remote, a small web page on the home network.
@@ -503,6 +516,7 @@ pub struct Editable {
     pub game_audio: bool,
     pub game_audio_volume: i32,
     pub dof: bool,
+    pub dof_rate_cap_ms: u64,
     pub remote: bool,
 }
 
@@ -530,6 +544,7 @@ fn updated(text: &str, v: &Editable) -> anyhow::Result<String> {
     set("sound", "game_audio", v.game_audio.into());
     set("sound", "game_audio_volume", (v.game_audio_volume as i64).into());
     set("dof", "enabled", v.dof.into());
+    set("dof", "rate_cap_ms", (v.dof_rate_cap_ms as i64).into());
     set("remote", "enabled", v.remote.into());
     // Only what differs from the template is written, so changing `style`
     // by hand still brings that template's whole layout.
@@ -607,6 +622,7 @@ mod tests {
         assert!(s.attract.enabled);
         assert!(s.audio.enabled, "video sound is on by default");
         assert!(!s.dof.enabled, "DOF is off by default");
+        assert_eq!(s.dof.rate_cap_ms, 200);
         assert!(!s.remote.enabled && s.remote.pin.is_none(), "the phone remote is off, with no PIN, by default");
         assert_eq!(s.remote.port, crate::remote::DEFAULT_PORT);
         assert_eq!(Settings::parse("[remote]\npin = 1234\n").unwrap().remote.pin.as_deref(), Some("1234"));
@@ -632,7 +648,7 @@ mod tests {
     #[test]
     fn save_keeps_comments_and_other_keys() {
         let before = "# my notes\n[playfield]\nui_rotation = 270 # turned\n\n[wheel]\nstyle = \"arc\"\n";
-        let v = Editable { style: WheelStyle::Flow, layout: Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, spacing: 70, arc: true }, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, remote: true };
+        let v = Editable { style: WheelStyle::Flow, layout: Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, spacing: 70, arc: true }, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, dof_rate_cap_ms: 350, remote: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
         let s = Settings::parse(&after).unwrap();
@@ -642,6 +658,7 @@ mod tests {
         assert!(!s.attract.enabled);
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs, s.audio.volume), (60, 6, Some(40)));
         assert!(s.dof.enabled);
+        assert_eq!(s.dof.rate_cap_ms, 350);
         assert!(s.remote.enabled);
         assert!(!s.audio.enabled);
     }
@@ -662,6 +679,7 @@ mod tests {
             game_audio: true,
             game_audio_volume: 50,
             dof: false,
+            dof_rate_cap_ms: 200,
             remote: true,
         };
         let s = Settings::parse(&updated(before, &v).unwrap()).unwrap();
@@ -675,7 +693,7 @@ mod tests {
         let mut style = WheelStyle::Arc;
         for _ in 0..4 {
             assert_eq!(WheelStyle::parse(style.key()), Some(style));
-            let v = Editable { style, layout: style.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
+            let v = Editable { style, layout: style.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, dof_rate_cap_ms: 200, remote: false };
             let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap()).unwrap();
             assert_eq!(s.wheel.style, style);
             assert_eq!(s.wheel.layout(), style.template());
@@ -699,7 +717,7 @@ mod tests {
         assert_eq!(s.wheel.layout(), WheelStyle::Minimal.template());
         assert!(s.dof.enabled);
         // Only changes from the template are saved: editing `style` later brings its layout.
-        let mut v = Editable { style: WheelStyle::Arc, layout: WheelStyle::Arc.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, remote: false };
+        let mut v = Editable { style: WheelStyle::Arc, layout: WheelStyle::Arc.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, dof_rate_cap_ms: 200, remote: false };
         let text = updated("[wheel]\nstyle = \"arc\"\nsize = 60\n", &v).unwrap();
         assert!(!text.contains("size") && !text.contains("position") && !text.contains("arc ="), "{text}");
         v.layout.position = WheelPosition::Left;

@@ -9,8 +9,9 @@
 //!   `E901`-`E990` goes to 1 and stays there;
 //! - wheel prior / next: `E800` / `E801` pulsed (1, then 0 at once);
 //!   page next / prior: `E804` / `E805`. Unlike Popper we pulse at most
-//!   once per [`PULSE_GAP`] (any of these events): a held flipper steps the
-//!   wheel up to ~28 times a second, and extra pulses are dropped, not queued;
+//!   once per Rate Cap (Options → DOF; any of these events): a held flipper
+//!   steps the wheel up to ~28 times a second, and extra pulses are dropped,
+//!   not queued;
 //! - game launch: `Finish()`, so the table's own DOF can use the hardware;
 //!   back from the game: `Init` again. Exit: `Finish()`.
 //!
@@ -34,10 +35,11 @@ pub const PAGE_PRIOR: u32 = 805;
 const RANDOM_FIRST: u32 = 901;
 const RANDOM_COUNT: u32 = 90;
 
-/// The shortest time between two wheel/page pulses (of any event); ones
-/// sooner are dropped, so fast scrolling flashes the toys about five times a second
-/// instead of hammering them (and DOF) on every step.
-const PULSE_GAP: Duration = Duration::from_millis(200);
+/// Rate Cap: the shortest time between two wheel/page pulses (of any
+/// event), in ms; ones sooner are dropped, so fast scrolling doesn't hammer
+/// the toys (and DOF) on every step. 0 is Off: every step pulses.
+pub const RATE_CAP_CHOICES: &[u64] = &[0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
+pub const DEFAULT_RATE_CAP_MS: u64 = 200;
 
 enum Cmd {
     /// Start a DOF session (if there isn't one).
@@ -57,13 +59,15 @@ pub struct Dof {
     /// A game (ours or another program's) is using the cabinet: no session.
     suspended: bool,
     tx: Option<Sender<Cmd>>,
-    /// When the last pulse was sent, for [`PULSE_GAP`].
+    /// Rate Cap, in ms (see [`RATE_CAP_CHOICES`]).
+    pub rate_cap_ms: u64,
+    /// When the last pulse was sent, for the Rate Cap.
     last_pulse: Option<Instant>,
 }
 
 impl Dof {
-    pub fn new(enabled: bool) -> Dof {
-        let mut d = Dof { enabled: false, suspended: false, tx: None, last_pulse: None };
+    pub fn new(enabled: bool, rate_cap_ms: u64) -> Dof {
+        let mut d = Dof { enabled: false, suspended: false, tx: None, rate_cap_ms: snap_rate_cap(rate_cap_ms), last_pulse: None };
         d.set_enabled(enabled);
         d
     }
@@ -118,9 +122,10 @@ impl Dof {
     }
 
     /// One of Popper's menu events (`PRIOR`, `NEXT`, ...), dropped if
-    /// another pulse went less than [`PULSE_GAP`] ago.
+    /// another pulse went less than the Rate Cap ago.
     pub fn pulse(&mut self, event: u32) {
-        if self.active() && throttle(&mut self.last_pulse, Instant::now()) {
+        let gap = Duration::from_millis(self.rate_cap_ms);
+        if self.active() && throttle(&mut self.last_pulse, gap, Instant::now()) {
             self.send(Cmd::Pulse(event));
         }
     }
@@ -137,10 +142,16 @@ impl Dof {
     }
 }
 
+/// A Rate Cap from the settings file as the nearest choice (a hand-typed
+/// 120 becomes 100, 1000 becomes 500), so the menus can show it.
+fn snap_rate_cap(ms: u64) -> u64 {
+    *RATE_CAP_CHOICES.iter().min_by_key(|&&c| c.abs_diff(ms)).unwrap_or(&DEFAULT_RATE_CAP_MS)
+}
+
 /// Whether a pulse may go at `now` (recording it if so): not if the last
-/// one went less than [`PULSE_GAP`] ago.
-fn throttle(last: &mut Option<Instant>, now: Instant) -> bool {
-    if last.is_some_and(|at| now.saturating_duration_since(at) < PULSE_GAP) {
+/// one went less than `gap` ago.
+fn throttle(last: &mut Option<Instant>, gap: Duration, now: Instant) -> bool {
+    if last.is_some_and(|at| now.saturating_duration_since(at) < gap) {
         return false;
     }
     *last = Some(now);
@@ -337,7 +348,7 @@ mod tests {
 
     #[test]
     fn disabled_sends_nothing() {
-        let mut d = Dof::new(false);
+        let mut d = Dof::new(false, DEFAULT_RATE_CAP_MS);
         d.select();
         d.pulse(NEXT);
         d.suspend(true);
@@ -346,18 +357,27 @@ mod tests {
     }
 
     #[test]
+    fn rate_cap_snaps_to_a_choice() {
+        assert_eq!([0, 1, 120, 130, 200, 1000].map(snap_rate_cap), [0, 0, 100, 150, 200, 500]);
+    }
+
+    #[test]
     fn pulses_are_throttled() {
         let mut last = None;
         let t = Instant::now();
         let ms = Duration::from_millis;
-        assert!(throttle(&mut last, t));
-        assert!(!throttle(&mut last, t + ms(35)));
-        assert!(!throttle(&mut last, t + PULSE_GAP - ms(1)));
-        assert!(throttle(&mut last, t + PULSE_GAP));
-        assert!(!throttle(&mut last, t + PULSE_GAP + ms(100)));
-        // Held flipper at 35 ms steps for 2 s: 10 pulses, about five a second.
-        let mut last = None;
-        assert_eq!((0..58).filter(|i| throttle(&mut last, t + ms(35 * i))).count(), 10);
+        let gap = ms(DEFAULT_RATE_CAP_MS);
+        assert!(throttle(&mut last, gap, t));
+        assert!(!throttle(&mut last, gap, t + ms(35)));
+        assert!(!throttle(&mut last, gap, t + gap - ms(1)));
+        assert!(throttle(&mut last, gap, t + gap));
+        assert!(!throttle(&mut last, gap, t + gap + ms(100)));
+        // Held flipper at 35 ms steps for 2 s: 10 pulses at 200 ms, every
+        // step with the cap off (0), 4 at 500 ms.
+        for (cap, want) in [(200, 10), (0, 58), (500, 4)] {
+            let mut last = None;
+            assert_eq!((0..58).filter(|i| throttle(&mut last, ms(cap), t + ms(35 * i))).count(), want, "{cap} ms");
+        }
     }
 
     /// On a cabinet: `cargo test -p rusty-popper dof_objects -- --ignored --nocapture`

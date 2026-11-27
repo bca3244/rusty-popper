@@ -138,7 +138,7 @@ impl App {
             "Layout \u{203a}".to_string(),
             "Attract Mode \u{203a}".to_string(),
             "Sound \u{203a}".to_string(),
-            format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
+            "DOF \u{203a}".to_string(),
             match (&self.remote_error, self.remote.is_some()) {
                 (Some(why), _) => format!("Phone Remote: Can't Start ({why})"),
                 // The address, for typing in when the QR code won't scan.
@@ -223,6 +223,42 @@ impl App {
             .collect()
     }
 
+    /// The rows of Options → DOF: the Rate Cap only while DOF is on.
+    pub(crate) fn dof_rows(&self) -> Vec<DofRow> {
+        use DofRow::*;
+        if self.dof.enabled {
+            vec![Toggle, RateCap, Back]
+        } else {
+            vec![Toggle, Back]
+        }
+    }
+
+    pub(crate) fn dof_labels(&self) -> Vec<String> {
+        self.dof_rows()
+            .into_iter()
+            .map(|row| match row {
+                DofRow::Toggle => format!("DOF: {}", if self.dof.enabled { "On" } else { "Off" }),
+                DofRow::RateCap if self.dof.rate_cap_ms == 0 => "Rate Cap: Off".to_string(),
+                DofRow::RateCap => format!("Rate Cap: {} ms", self.dof.rate_cap_ms),
+                DofRow::Back => "Back".to_string(),
+            })
+            .collect()
+    }
+
+    /// Cycles the value on Options → DOF row `row`, applies it, and saves it.
+    pub(crate) fn change_dof(&mut self, row: DofRow) {
+        match row {
+            DofRow::Toggle => {
+                let on = !self.dof.enabled;
+                self.dof.set_enabled(on);
+                self.dof_shown = None;
+            }
+            DofRow::RateCap => self.dof.rate_cap_ms = next_choice(dof::RATE_CAP_CHOICES, self.dof.rate_cap_ms),
+            DofRow::Back => return,
+        }
+        self.save_settings();
+    }
+
     /// The rows of Options → Sound: each volume only while its sound is on.
     pub(crate) fn sound_rows(&self) -> Vec<SoundRow> {
         use SoundRow::*;
@@ -265,6 +301,7 @@ impl App {
         let n = match self.menu.as_ref().map(|m| m.kind) {
             Some(MenuKind::Attract) => self.attract_rows().len(),
             Some(MenuKind::Sound) => self.sound_rows().len(),
+            Some(MenuKind::Dof) => self.dof_rows().len(),
             _ => return,
         };
         if let Some(m) = self.menu.as_mut() {
@@ -291,11 +328,6 @@ impl App {
     /// Cycles the value on Options row `row`, applies it, and saves it.
     pub(crate) fn change_option(&mut self, row: usize) {
         match row {
-            DOF_ROW => {
-                let on = !self.dof.enabled;
-                self.dof.set_enabled(on);
-                self.dof_shown = None;
-            }
             REMOTE_ROW => {
                 let on = !self.remote_cfg.enabled;
                 self.set_remote(on, Duration::ZERO);
@@ -372,6 +404,8 @@ impl App {
             game_audio: self.game_audio.enabled,
             game_audio_volume: self.game_audio.volume,
             dof: self.dof.enabled,
+            dof_rate_cap: self.dof.rate_cap_ms,
+            rate_cap_choices: dof::RATE_CAP_CHOICES,
             update: update_label_for(&status),
             update_state: match &status {
                 Off => "idle",
@@ -431,6 +465,7 @@ impl App {
                 self.dof.set_enabled(on()?);
                 self.dof_shown = None;
             }
+            "dof_rate_cap" => self.dof.rate_cap_ms = choice(dof::RATE_CAP_CHOICES)?,
             // Installs only when the menu is up (never mid-game), as from Options.
             "update" => {
                 match (value, self.updater.status()) {
@@ -463,6 +498,7 @@ impl App {
             game_audio: self.game_audio.enabled,
             game_audio_volume: self.game_audio.volume,
             dof: self.dof.enabled,
+            dof_rate_cap_ms: self.dof.rate_cap_ms,
             remote: self.remote_cfg.enabled,
         };
         if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
@@ -506,7 +542,7 @@ impl App {
             return;
         }
         // The submenus' rows depend on what's switched on.
-        let (attract_rows, sound_rows) = (self.attract_rows(), self.sound_rows());
+        let (attract_rows, sound_rows, dof_rows) = (self.attract_rows(), self.sound_rows(), self.dof_rows());
         // While a menu is open, browsing buttons move its highlight.
         if let Some(menu) = self.menu.as_mut() {
             let n = match menu.kind {
@@ -515,6 +551,7 @@ impl App {
                 MenuKind::Attract => attract_rows.len(),
                 MenuKind::Sound => sound_rows.len(),
                 MenuKind::Layout => LAYOUT_ROWS.len(),
+                MenuKind::Dof => dof_rows.len(),
             };
             match action {
                 Prev | PagePrev | LetterPrev => {
@@ -560,6 +597,18 @@ impl App {
                         }
                         (MenuKind::Options, SOUND_ROW) => {
                             self.menu = Some(ExitMenu { kind: MenuKind::Sound, selected: 0, opened: Instant::now() });
+                            return;
+                        }
+                        (MenuKind::Options, DOF_ROW) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Dof, selected: 0, opened: Instant::now() });
+                            return;
+                        }
+                        (MenuKind::Dof, c) if dof_rows.get(c).is_some_and(|r| *r != DofRow::Back) => {
+                            self.change_dof(dof_rows[c]);
+                            return;
+                        }
+                        (MenuKind::Dof, _) => {
+                            self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: DOF_ROW, opened: Instant::now() });
                             return;
                         }
                         (MenuKind::Options, c) if c < OPTION_ROWS - 1 => {
