@@ -6,12 +6,13 @@
 //! thread keeps one waveOut stream open while sounds play and mixes up to
 //! [`MAX_VOICES`] at once, so fast scrolling never waits on the audio device
 //! and sounds overlap instead of cutting each other off. With nothing
-//! playing, the thread sleeps and the device sits idle.
+//! playing, the thread sleeps and the device sits idle. The device is
+//! opened on the first sound and reopened if it fails or goes away.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Sfx {
@@ -175,57 +176,135 @@ fn mix(out: &mut [i16], voices: &mut Vec<Voice>) {
     }
 }
 
-/// The mixer thread: runs until the [`Sounds`] is dropped.
+/// A buffer handed to the device and not back after this long means the
+/// device has gone (unplugged, or the audio service restarted).
+const STUCK_AFTER: Duration = Duration::from_secs(1);
+/// After the device couldn't be opened, wait this long before trying again
+/// (on the next sound).
+const REOPEN_AFTER: Duration = Duration::from_secs(5);
+
+/// The open waveOut stream and its buffers.
+struct Device {
+    dev: windows_sys::Win32::Media::Audio::HWAVEOUT,
+    // The sample buffers and their headers stay put (on the heap, never
+    // resized) while the device may be reading them, and are only freed
+    // after waveOutReset (in Drop).
+    _bufs: Vec<Box<[i16]>>,
+    hdrs: Vec<windows_sys::Win32::Media::Audio::WAVEHDR>,
+    /// When each buffer was handed to the device, while it has it.
+    queued: [Option<Instant>; BUFS],
+}
+
+const HDR_SIZE: u32 = std::mem::size_of::<windows_sys::Win32::Media::Audio::WAVEHDR>() as u32;
+
+impl Device {
+    fn open() -> Result<Device, u32> {
+        use windows_sys::Win32::Media::Audio::{waveOutOpen, waveOutPrepareHeader, CALLBACK_NULL, HWAVEOUT, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER};
+        let fmt = WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_PCM as u16,
+            nChannels: 2,
+            nSamplesPerSec: RATE,
+            nAvgBytesPerSec: RATE * 4,
+            nBlockAlign: 4,
+            wBitsPerSample: 16,
+            cbSize: 0,
+        };
+        let mut dev: HWAVEOUT = std::ptr::null_mut();
+        let r = unsafe { waveOutOpen(&mut dev, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) };
+        if r != 0 {
+            return Err(r);
+        }
+        let mut bufs: Vec<Box<[i16]>> = (0..BUFS).map(|_| vec![0i16; BUF_FRAMES * 2].into_boxed_slice()).collect();
+        let mut hdrs: Vec<WAVEHDR> = bufs
+            .iter_mut()
+            .map(|buf| {
+                let mut h: WAVEHDR = unsafe { std::mem::zeroed() };
+                h.lpData = buf.as_mut_ptr().cast();
+                h.dwBufferLength = (BUF_FRAMES * 4) as u32;
+                h
+            })
+            .collect();
+        // Prepared where they'll stay.
+        for h in hdrs.iter_mut() {
+            unsafe { waveOutPrepareHeader(dev, h, HDR_SIZE) };
+        }
+        Ok(Device { dev, _bufs: bufs, hdrs, queued: [None; BUFS] })
+    }
+
+    /// Takes back the buffers the device has finished with. Returns false if
+    /// one has been out far too long (the device is gone).
+    fn reap(&mut self) -> bool {
+        use windows_sys::Win32::Media::Audio::WHDR_DONE;
+        for (q, h) in self.queued.iter_mut().zip(&self.hdrs) {
+            // WAVEHDR is packed, so read the flag unaligned; the fence stops the
+            // compiler from reusing an earlier read (the driver sets it).
+            std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+            if q.is_some() && unsafe { std::ptr::addr_of!(h.dwFlags).read_unaligned() } & WHDR_DONE != 0 {
+                *q = None;
+            }
+        }
+        !self.queued.iter().flatten().any(|at| at.elapsed() >= STUCK_AFTER)
+    }
+
+    fn busy(&self) -> bool {
+        self.queued.iter().any(Option::is_some)
+    }
+
+    /// Mixes the voices into every free buffer and hands those to the device.
+    fn fill(&mut self, voices: &mut Vec<Voice>) -> Result<(), u32> {
+        use windows_sys::Win32::Media::Audio::waveOutWrite;
+        for (i, h) in self.hdrs.iter_mut().enumerate() {
+            if self.queued[i].is_some() || voices.is_empty() {
+                continue;
+            }
+            // SAFETY: this buffer isn't queued, so the device isn't reading it.
+            let out = unsafe { std::slice::from_raw_parts_mut(h.lpData.cast::<i16>(), BUF_FRAMES * 2) };
+            mix(out, voices);
+            let r = unsafe { waveOutWrite(self.dev, h, HDR_SIZE) };
+            if r != 0 {
+                return Err(r);
+            }
+            self.queued[i] = Some(Instant::now());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Media::Audio::{waveOutClose, waveOutReset, waveOutUnprepareHeader};
+        unsafe {
+            waveOutReset(self.dev);
+            for h in self.hdrs.iter_mut() {
+                waveOutUnprepareHeader(self.dev, h, HDR_SIZE);
+            }
+            waveOutClose(self.dev);
+        }
+    }
+}
+
+/// The mixer thread: runs until the [`Sounds`] is dropped. The device is
+/// opened on the first sound, and again after it failed or went away (at
+/// most every few seconds), so a device that wasn't ready at boot, or came
+/// back, still gets the menu's sounds.
 fn mixer(rx: mpsc::Receiver<Cmd>) {
-    use windows_sys::Win32::Media::Audio::{
-        waveOutClose, waveOutOpen, waveOutPrepareHeader, waveOutReset, waveOutUnprepareHeader, waveOutWrite, CALLBACK_NULL, HWAVEOUT,
-        WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
-    };
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
     unsafe {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     }
-    let fmt = WAVEFORMATEX {
-        wFormatTag: WAVE_FORMAT_PCM as u16,
-        nChannels: 2,
-        nSamplesPerSec: RATE,
-        nAvgBytesPerSec: RATE * 4,
-        nBlockAlign: 4,
-        wBitsPerSample: 16,
-        cbSize: 0,
-    };
-    let mut dev: HWAVEOUT = std::ptr::null_mut();
-    let r = unsafe { waveOutOpen(&mut dev, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) };
-    if r != 0 {
-        log::warn!("Couldn't open the audio device for menu sounds (error {r}); sound effects off");
-        return;
-    }
-    let hdr_size = std::mem::size_of::<WAVEHDR>() as u32;
-    // The sample buffers and their headers stay put (boxed) while the device
-    // may be reading them, and are only freed after waveOutReset.
-    let mut bufs: Vec<Box<[i16]>> = (0..BUFS).map(|_| vec![0i16; BUF_FRAMES * 2].into_boxed_slice()).collect();
-    let mut hdrs: Vec<Box<WAVEHDR>> = Vec::with_capacity(BUFS);
-    for buf in bufs.iter_mut() {
-        let mut h: Box<WAVEHDR> = Box::new(unsafe { std::mem::zeroed() });
-        h.lpData = buf.as_mut_ptr().cast();
-        h.dwBufferLength = (BUF_FRAMES * 4) as u32;
-        unsafe { waveOutPrepareHeader(dev, &mut *h, hdr_size) };
-        hdrs.push(h);
-    }
-    let mut queued = [false; BUFS];
+    let mut device: Option<Device> = None;
+    let mut next_open = Instant::now();
     let mut voices: Vec<Voice> = Vec::new();
-    let mut warned = false;
+    // Warn once per kind of trouble, not on every sound.
+    let (mut warned_open, mut warned_write) = (false, false);
     'run: loop {
         // Has the device finished with the buffers we gave it?
-        for (q, h) in queued.iter_mut().zip(&hdrs) {
-            // WAVEHDR is packed, so read the flag unaligned; the fence stops the
-            // compiler from reusing an earlier read (the driver sets it).
-            std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-            if *q && unsafe { std::ptr::addr_of!(h.dwFlags).read_unaligned() } & WHDR_DONE != 0 {
-                *q = false;
-            }
+        if device.as_mut().is_some_and(|d| !d.reap()) {
+            log::warn!("The audio device stopped taking menu sounds; reopening it");
+            device = None;
+            next_open = Instant::now() + REOPEN_AFTER;
         }
-        if voices.is_empty() && !queued.iter().any(|q| *q) {
+        if voices.is_empty() && !device.as_ref().is_some_and(Device::busy) {
             // Nothing playing: sleep until the next sound.
             match rx.recv() {
                 Ok(c) => handle(c, &mut voices),
@@ -239,31 +318,35 @@ fn mixer(rx: mpsc::Receiver<Cmd>) {
                 Err(mpsc::TryRecvError::Disconnected) => break 'run,
             }
         }
-        for (i, h) in hdrs.iter_mut().enumerate() {
-            if queued[i] || voices.is_empty() {
-                continue;
+        if device.is_none() && !voices.is_empty() && Instant::now() >= next_open {
+            match Device::open() {
+                Ok(d) => device = Some(d),
+                Err(r) => {
+                    if !warned_open {
+                        log::warn!("Couldn't open the audio device for menu sounds (error {r}); trying again later");
+                        warned_open = true;
+                    }
+                    next_open = Instant::now() + REOPEN_AFTER;
+                }
             }
-            // SAFETY: this buffer isn't queued, so the device isn't reading it.
-            let out = unsafe { std::slice::from_raw_parts_mut(h.lpData.cast::<i16>(), BUF_FRAMES * 2) };
-            mix(out, &mut voices);
-            let r = unsafe { waveOutWrite(dev, &mut **h, hdr_size) };
-            if r == 0 {
-                queued[i] = true;
-            } else if !warned {
-                log::warn!("Menu sound output failed (error {r})");
-                warned = true;
+        }
+        match device.as_mut() {
+            Some(d) => {
+                if let Err(r) = d.fill(&mut voices) {
+                    if !warned_write {
+                        log::warn!("Menu sound output failed (error {r}); reopening the device");
+                        warned_write = true;
+                    }
+                    device = None;
+                    voices.clear();
+                    next_open = Instant::now() + REOPEN_AFTER;
+                }
             }
+            // No device: these sounds are lost rather than played late.
+            None => voices.clear(),
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    unsafe {
-        waveOutReset(dev);
-        for h in hdrs.iter_mut() {
-            waveOutUnprepareHeader(dev, &mut **h, hdr_size);
-        }
-        waveOutClose(dev);
-    }
-    drop(bufs);
 }
 
 /// Reads a PCM 16-bit WAV (mono or stereo).

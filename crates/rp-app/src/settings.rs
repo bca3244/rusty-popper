@@ -415,6 +415,10 @@ pub struct RemoteSettings {
     /// Optional: the host the QR code links to (default: this machine's
     /// address on the home network).
     pub address: Option<String>,
+    /// Part of `[remote]` couldn't be read (a PIN among it, maybe), so the
+    /// remote stays off rather than start without it.
+    #[serde(skip)]
+    pub unreadable: bool,
 }
 
 /// A PIN written as text or as a bare number.
@@ -437,53 +441,151 @@ fn default_remote_port() -> u16 {
 
 impl Default for RemoteSettings {
     fn default() -> Self {
-        RemoteSettings { enabled: false, port: default_remote_port(), pin: None, address: None }
+        RemoteSettings { enabled: false, port: default_remote_port(), pin: None, address: None, unreadable: false }
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default)]
 pub struct Settings {
-    #[serde(default)]
     pub wheel: WheelSettings,
-    #[serde(default)]
     pub playfield: PlayfieldSettings,
-    #[serde(default)]
     pub input: InputSettings,
-    #[serde(default)]
     pub attract: AttractSettings,
-    #[serde(default)]
     pub audio: AudioSettings,
-    #[serde(default)]
     pub launch: LaunchSettings,
-    #[serde(default)]
     pub paths: PathSettings,
-    #[serde(default)]
     pub sound: SoundSettings,
-    #[serde(default)]
     pub update: UpdateSettings,
-    #[serde(default)]
     pub dof: DofSettings,
-    #[serde(default)]
     pub remote: RemoteSettings,
+    /// What in the file couldn't be read and was left at its default
+    /// ("line 12", "[sound] volume"), for a notice on screen.
+    pub problems: Vec<String>,
+}
+
+/// The most broken lines skipped before the whole file is given up on.
+const MAX_BAD_LINES: usize = 20;
+
+/// The file as a table, leaving out what isn't valid TOML: each error
+/// blanks the section it's in (from its `[header]` to the next one), so one
+/// typo only costs that section. Also returns what was left out, and the
+/// names of the sections that lost something.
+fn lenient_table(text: &str) -> (toml::Table, Vec<String>, Vec<String>) {
+    let mut lines: Vec<&str> = text.lines().collect();
+    let (mut problems, mut bad) = (Vec::new(), Vec::new());
+    for _ in 0..MAX_BAD_LINES {
+        let joined = lines.join("\n");
+        let e = match toml::from_str::<toml::Table>(&joined) {
+            Ok(t) => return (t, problems, bad),
+            Err(e) => e,
+        };
+        let Some(at) = e.span().map(|s| joined[..s.start.min(joined.len())].matches('\n').count()) else { break };
+        let at = at.min(lines.len().saturating_sub(1));
+        let is_header = |l: &str| l.trim_start().starts_with('[');
+        let from = (0..=at).rev().find(|&i| lines.get(i).is_some_and(|l| is_header(l))).unwrap_or(0);
+        let to = (at + 1..lines.len()).find(|&i| is_header(lines[i])).unwrap_or(lines.len());
+        let name = lines.get(from).filter(|l| is_header(l)).map(|l| l.trim().trim_start_matches('[').split(']').next().unwrap_or("").trim().to_string());
+        log::warn!("rusty-popper.toml line {}: {}", at + 1, e.message());
+        match &name {
+            Some(n) => {
+                problems.push(format!("[{n}] (line {})", at + 1));
+                bad.push(n.clone());
+            }
+            None => {
+                problems.push(format!("line {}", at + 1));
+                // A top-level `remote = { .. }` or `remote.pin = ..` is [remote].
+                bad.extend(lines[from..to].iter().filter_map(|l| l.trim().split(['=', '.', ' ']).next()).map(str::to_string));
+            }
+        }
+        if from >= to {
+            break;
+        }
+        for l in &mut lines[from..to] {
+            *l = "";
+        }
+    }
+    log::warn!("rusty-popper.toml couldn't be read; using defaults");
+    (toml::Table::new(), vec!["the whole file".into()], vec!["remote".into()])
+}
+
+/// One `[name]` section of the file. A key that can't be read (a wrong
+/// type, out of range) is left at its default, keeping the rest.
+fn section<T: serde::de::DeserializeOwned + Default>(table: &toml::Table, name: &str, problems: &mut Vec<String>, bad: &mut Vec<String>) -> T {
+    let Some(v) = table.get(name) else { return T::default() };
+    let mut fail = |what: String| {
+        log::warn!("rusty-popper.toml: ignoring {what} (using the default)");
+        problems.push(what);
+        bad.push(name.to_string());
+    };
+    let Some(keys) = v.as_table() else {
+        fail(format!("[{name}]"));
+        return T::default();
+    };
+    if let Ok(t) = v.clone().try_into::<T>() {
+        return t;
+    }
+    let mut good = toml::Table::new();
+    for (k, val) in keys {
+        let mut trial = good.clone();
+        trial.insert(k.clone(), val.clone());
+        if trial.clone().try_into::<T>().is_ok() {
+            good = trial;
+        } else {
+            fail(format!("[{name}] {k}"));
+        }
+    }
+    good.try_into().unwrap_or_default()
 }
 
 impl Settings {
-    fn parse(text: &str) -> anyhow::Result<Self> {
-        Ok(toml::from_str(text)?)
+    /// Reads the settings from the file's text, as much as can be read:
+    /// broken lines and bad values fall back to defaults (see `problems`),
+    /// so a typo never throws away the rest of the file.
+    fn parse(text: &str) -> Self {
+        let (table, mut problems, mut bad) = lenient_table(text);
+        let (p, b) = (&mut problems, &mut bad);
+        let mut s = Settings {
+            wheel: section(&table, "wheel", p, b),
+            playfield: section(&table, "playfield", p, b),
+            input: section(&table, "input", p, b),
+            attract: section(&table, "attract", p, b),
+            audio: section(&table, "audio", p, b),
+            launch: section(&table, "launch", p, b),
+            paths: section(&table, "paths", p, b),
+            sound: section(&table, "sound", p, b),
+            update: section(&table, "update", p, b),
+            dof: section(&table, "dof", p, b),
+            remote: section(&table, "remote", p, b),
+            problems: Vec::new(),
+        };
+        s.remote.unreadable = bad.iter().any(|n| n == "remote");
+        s.problems = problems;
+        s
     }
 
-    /// Reads the settings file. A missing file means defaults; so does one
-    /// that can't be read or parsed (with a warning), so that a typo or a
+    /// Reads the settings file. A missing file means defaults, and so does
+    /// one that can't be read (with a warning), so that a typo or a
     /// half-written file never stops the cabinet from starting.
     pub fn load(path: &Path) -> Self {
         if !path.is_file() {
             return Settings::default();
         }
-        let parsed = std::fs::read_to_string(path).map_err(anyhow::Error::from).and_then(|t| Self::parse(&t));
-        parsed.unwrap_or_else(|e| {
-            log::warn!("Ignoring {} (using defaults): {e:#}", path.display());
-            Settings::default()
-        })
+        match std::fs::read_to_string(path) {
+            Ok(t) => Self::parse(&t),
+            Err(e) => {
+                log::warn!("Ignoring {} (using defaults): {e}", path.display());
+                Settings { problems: vec!["the whole file".into()], ..Settings::default() }
+            }
+        }
+    }
+
+    /// A short notice for the wheel when part of the file was ignored.
+    pub fn problem_notice(&self) -> Option<String> {
+        match &self.problems[..] {
+            [] => None,
+            [one] => Some(format!("rusty-popper.toml: {one} ignored")),
+            [first, rest @ ..] => Some(format!("rusty-popper.toml: {first} and {} more ignored (see the log)", rest.len())),
+        }
     }
 }
 
@@ -615,7 +717,7 @@ mod tests {
 
     #[test]
     fn defaults_apply_to_missing_keys() {
-        let s = Settings::parse("[wheel]\nstyle = \"flow\"\n[input]\nmenu_joy_buttons = [3]\n").unwrap();
+        let s = Settings::parse("[wheel]\nstyle = \"flow\"\n[input]\nmenu_joy_buttons = [3]\n");
         assert_eq!(s.wheel.style, WheelStyle::Flow);
         assert_eq!(s.input.menu_joy_buttons, [3]);
         assert!(s.input.joystick_needs_focus && s.input.keyboard_quit);
@@ -625,11 +727,39 @@ mod tests {
         assert_eq!(s.dof.rate_cap_ms, 100);
         assert!(!s.remote.enabled && s.remote.pin.is_none(), "the phone remote is off, with no PIN, by default");
         assert_eq!(s.remote.port, crate::remote::DEFAULT_PORT);
-        assert_eq!(Settings::parse("[remote]\npin = 1234\n").unwrap().remote.pin.as_deref(), Some("1234"));
-        assert_eq!(Settings::parse("[remote]\npin = 'ab12'\n").unwrap().remote.pin.as_deref(), Some("ab12"));
+        assert_eq!(Settings::parse("[remote]\npin = 1234\n").remote.pin.as_deref(), Some("1234"));
+        assert_eq!(Settings::parse("[remote]\npin = 'ab12'\n").remote.pin.as_deref(), Some("ab12"));
         assert_eq!((s.attract.idle_secs, s.attract.interval_secs), (180, 12));
         assert!(s.launch.ignore_processes.is_empty() && s.paths.popper_dir.is_none());
-        assert!(Settings::parse("[wheel\nstyle=").is_err());
+        assert!(!Settings::parse("[wheel\nstyle=").problems.is_empty());
+    }
+
+    #[test]
+    fn bad_lines_and_values_only_cost_themselves() {
+        // Not valid TOML (a number can't start with 0): [remote] goes, the rest stays.
+        let text = "[paths]\npopper_dir = 'D:/Popper'\n[remote]\nenabled = true\npin = 0420\n[input]\nkeyboard_quit = false\n";
+        let s = Settings::parse(text);
+        assert_eq!(s.paths.popper_dir.as_deref(), Some(Path::new("D:/Popper")));
+        assert!(!s.input.keyboard_quit);
+        assert!(!s.remote.enabled && s.remote.pin.is_none());
+        assert!(s.remote.unreadable, "the remote must not start without its PIN");
+        assert_eq!(s.problems, ["[remote] (line 5)"]);
+        assert_eq!(s.problem_notice().as_deref(), Some("rusty-popper.toml: [remote] (line 5) ignored"));
+        // Wrong types and out-of-range values: just that key falls back.
+        let s = Settings::parse("[sound]\nvolume = 30.5\nenabled = false\n[dof]\nrate_cap_ms = -1\nenabled = true\n[remote]\nport = 70000\npin = '12'\n");
+        assert_eq!((s.sound.volume, s.sound.enabled), (30, false));
+        assert_eq!((s.dof.rate_cap_ms, s.dof.enabled), (100, true));
+        assert_eq!((s.remote.port, s.remote.pin.as_deref()), (crate::remote::DEFAULT_PORT, Some("12")));
+        assert!(s.remote.unreadable);
+        assert_eq!(s.problems, ["[sound] volume", "[dof] rate_cap_ms", "[remote] port"]);
+        // A broken header loses its section only; a top-level inline [remote] counts as [remote].
+        let s = Settings::parse("[sound\nvolume = 10\n[attract]\nidle_secs = 60\n");
+        assert_eq!((s.sound.volume, s.attract.idle_secs), (30, 60));
+        assert!(!s.remote.unreadable);
+        assert!(Settings::parse("remote = { pin = 0420 }\n[dof]\nenabled = true\n").remote.unreadable);
+        assert!(Settings::parse("remote = { pin = 0420 }\n[dof]\nenabled = true\n").dof.enabled);
+        let s = Settings::parse("[wheel]\nstyle = 'flow'\n");
+        assert!(s.problems.is_empty() && !s.remote.unreadable && s.problem_notice().is_none());
     }
 
     #[test]
@@ -639,7 +769,7 @@ mod tests {
         let f = dir.join("t.toml");
         std::fs::write(&f, "# keep\npaths = { mpv_dll = 'C:/x/libmpv-2.dll' }\n").unwrap();
         save_popper_dir(&f, Path::new("D:/Popper")).unwrap();
-        let s = Settings::parse(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        let s = Settings::parse(&std::fs::read_to_string(&f).unwrap());
         assert_eq!(s.paths.popper_dir.as_deref(), Some(Path::new("D:/Popper")));
         assert_eq!(s.paths.mpv_dll.as_deref(), Some(Path::new("C:/x/libmpv-2.dll")));
         let _ = std::fs::remove_dir_all(&dir);
@@ -651,7 +781,7 @@ mod tests {
         let v = Editable { style: WheelStyle::Flow, layout: Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, spacing: 70, arc: true }, attract_enabled: false, attract_idle_secs: 60, attract_interval_secs: 6, video_sound: false, volume: 40, sound_enabled: false, sound_volume: 30, game_audio: false, game_audio_volume: 50, dof: true, dof_rate_cap_ms: 350, remote: true };
         let after = updated(before, &v).unwrap();
         assert!(after.contains("# my notes") && after.contains("ui_rotation = 270 # turned"));
-        let s = Settings::parse(&after).unwrap();
+        let s = Settings::parse(&after);
         assert_eq!(s.wheel.style, WheelStyle::Flow);
         assert_eq!(s.wheel.layout(), Layout { size: 60, position: WheelPosition::Left, side_wheels: 4, spacing: 70, arc: true });
         assert_eq!(s.playfield.ui_rotation, Some(270));
@@ -682,7 +812,7 @@ mod tests {
             dof_rate_cap_ms: 200,
             remote: true,
         };
-        let s = Settings::parse(&updated(before, &v).unwrap()).unwrap();
+        let s = Settings::parse(&updated(before, &v).unwrap());
         assert!(s.remote.enabled);
         assert_eq!((s.remote.pin.as_deref(), s.remote.port), (Some("1234"), 9000));
         assert_eq!(s.sound.volume, 30);
@@ -694,26 +824,26 @@ mod tests {
         for _ in 0..4 {
             assert_eq!(WheelStyle::parse(style.key()), Some(style));
             let v = Editable { style, layout: style.template(), attract_enabled: true, attract_idle_secs: 180, attract_interval_secs: 12, video_sound: true, volume: 50, sound_enabled: true, sound_volume: 30, game_audio: true, game_audio_volume: 50, dof: false, dof_rate_cap_ms: 200, remote: false };
-            let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap()).unwrap();
+            let s = Settings::parse(&updated("[wheel]\nstyle = \"arc\"\n", &v).unwrap());
             assert_eq!(s.wheel.style, style);
             assert_eq!(s.wheel.layout(), style.template());
             style = style.toggled();
         }
         assert_eq!(style, WheelStyle::Arc, "the Options cycle visits all four styles");
-        assert_eq!(Settings::parse("[wheel]\nstyle = \"vertical\"\n").unwrap().wheel.style, WheelStyle::Vertical);
+        assert_eq!(Settings::parse("[wheel]\nstyle = \"vertical\"\n").wheel.style, WheelStyle::Vertical);
     }
 
     #[test]
     fn layout_defaults_to_the_template() {
         // An older file (style only) gets the template's layout.
-        let s = Settings::parse("[wheel]\nstyle = \"vertical\"\n").unwrap();
+        let s = Settings::parse("[wheel]\nstyle = \"vertical\"\n");
         assert_eq!(s.wheel.layout(), WheelStyle::Vertical.template());
         assert_eq!(s.wheel.layout().position, WheelPosition::Right);
         // Values the file sets win; out-of-range ones are brought into range.
-        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"Left\"\nside_wheels = 9\nspacing = 180\narc = false\n").unwrap();
+        let s = Settings::parse("[wheel]\nstyle = \"arc\"\nsize = 133\nposition = \"Left\"\nside_wheels = 9\nspacing = 180\narc = false\n");
         assert_eq!(s.wheel.layout(), Layout { size: 130, position: WheelPosition::Left, side_wheels: MAX_SIDE_WHEELS, spacing: 175, arc: false });
         // Unreadable values fall back to the template, keeping the rest of the file.
-        let s = Settings::parse("[wheel]\nstyle = \"minimal\"\nsize = -10\nposition = \"up\"\nside_wheels = 1.5\narc = \"on\"\n[dof]\nenabled = true\n").unwrap();
+        let s = Settings::parse("[wheel]\nstyle = \"minimal\"\nsize = -10\nposition = \"up\"\nside_wheels = 1.5\narc = \"on\"\n[dof]\nenabled = true\n");
         assert_eq!(s.wheel.layout(), WheelStyle::Minimal.template());
         assert!(s.dof.enabled);
         // Only changes from the template are saved: editing `style` later brings its layout.
@@ -724,7 +854,7 @@ mod tests {
         let text = updated(&text, &v).unwrap();
         assert!(text.contains("position = \"left\"") && !text.contains("size"), "{text}");
         let edited = text.replace("style = \"arc\"", "style = \"vertical\"");
-        assert_eq!(Settings::parse(&edited).unwrap().wheel.layout(), Layout { position: WheelPosition::Left, ..WheelStyle::Vertical.template() });
+        assert_eq!(Settings::parse(&edited).wheel.layout(), Layout { position: WheelPosition::Left, ..WheelStyle::Vertical.template() });
         for t in [WheelStyle::Arc, WheelStyle::Flow, WheelStyle::Minimal, WheelStyle::Vertical] {
             let l = t.template();
             assert!(SIZE_CHOICES.contains(&l.size) && SPACING_CHOICES.contains(&l.spacing) && l.side_wheels <= MAX_SIDE_WHEELS);

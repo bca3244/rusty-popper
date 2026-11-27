@@ -239,6 +239,8 @@ impl App {
             if let updater::Status::Staged { version, dir } = self.updater.status() {
                 // Mark it first: el.exit() only takes effect after this frame.
                 self.updater.restarting(version.clone());
+                // The new version opens DOF as it starts: ours must be over.
+                self.dof.shutdown();
                 match updater::apply_and_restart(&dir, &exe_dir(), &version) {
                     Ok(()) => {
                         el.exit();
@@ -247,6 +249,8 @@ impl App {
                     Err(e) => {
                         log::error!("Installing the update failed: {e:#}");
                         self.updater.fail(format!("{e:#}"));
+                        self.dof.resume();
+                        self.dof_shown = None;
                     }
                 }
             }
@@ -523,6 +527,11 @@ impl App {
                 o.window.set_visible(o.screen.slot == Slot::PlayField || item.media(o.screen.slot).is_some());
             }
             g.outs[0].window.focus_window();
+            // A notice from startup (settings that couldn't be read) is timed from now.
+            if let Some(n) = self.notice.as_mut() {
+                n.1 = Instant::now();
+            }
+            MENU_SHOWN.store(true, Ordering::Relaxed);
         }
 
         if self.deadline.is_some_and(|d| Instant::now() >= d) {

@@ -1587,14 +1587,14 @@ dependencies = [
 
 [[package]]
 name = "rp-config"
-version = "0.2.55"
+version = "0.2.56"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "rp-db"
-version = "0.2.55"
+version = "0.2.56"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "rp-launch"
-version = "0.2.55"
+version = "0.2.56"
 dependencies = [
  "anyhow",
  "log",
@@ -1714,7 +1714,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-popper"
-version = "0.2.55"
+version = "0.2.56"
 dependencies = [
  "anyhow",
  "chrono",

@@ -108,8 +108,11 @@ const GAME_UP_TIMEOUT: Duration = Duration::from_secs(60);
 /// tables can take over a minute to load on a first run (textures, shaders).
 const TABLE_UP_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How long a restart or shutdown from the phone waits for a game to close.
-const POWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a restart or shutdown from the phone waits for a game to close
+/// (past the close script's own 30 s limit).
+const POWER_WAIT: Duration = Duration::from_secs(35);
+/// Then, after force-closing the game, how long before powering off anyway.
+const POWER_FORCE_WAIT: Duration = Duration::from_secs(10);
 
 /// How many restarts in a row led to this run (`--restarted`).
 static RESTARTED: AtomicU32 = AtomicU32::new(0);
@@ -123,6 +126,13 @@ static PROBATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SELF_RESTARTED: AtomicBool = AtomicBool::new(false);
 /// The menu got as far as showing (so a later error is a stop, not a failed start).
 static MENU_RAN: AtomicBool = AtomicBool::new(false);
+/// The menu's first frame is on screen: a fresh update got going, so a later
+/// error is no reason to roll it back.
+static MENU_SHOWN: AtomicBool = AtomicBool::new(false);
+/// How long a copy that replaces another (a restart, an update, a rollback)
+/// waits for it to exit; any other second copy waits only briefly.
+const REPLACE_WAIT: Duration = Duration::from_secs(20);
+const SECOND_COPY_WAIT: Duration = Duration::from_secs(3);
 
 struct Args {
     popper: Option<PathBuf>,
@@ -197,20 +207,50 @@ fn main() {
         // A crash of the menu itself (not of a helper thread, which is coped
         // with) would bare the desktop: start a fresh copy instead.
         if std::thread::current().name() == Some("main") && MENU_UP.swap(false, Ordering::Relaxed) {
-            restart_self();
+            // The toys off first: the copy started next opens DOF itself.
+            dof::shutdown_all();
+            if !restart_self() {
+                // Given up: never a bare desktop. A fresh update that keeps
+                // crashing goes back to the previous version.
+                if PROBATION_ACTIVE.load(Ordering::Relaxed) && updater::on_probation(&exe_dir()) {
+                    win::release_instance();
+                    if updater::rollback(&exe_dir(), "the new version kept crashing").is_ok() {
+                        log::logger().flush();
+                        std::process::exit(101);
+                    }
+                }
+                win::release_instance();
+                let why = info.to_string();
+                let rot = Settings::load(&exe_dir().join("rusty-popper.toml")).playfield.ui_rotation;
+                // Its own thread: this one's message loop belongs to the
+                // menu's (now dead) windows.
+                let shown = std::thread::Builder::new().name("errscreen".into()).spawn(move || errscreen::show(&exe_dir(), "Rusty Popper stopped", &why, rot));
+                if let Ok(t) = shown {
+                    let _ = t.join();
+                }
+            }
             log::logger().flush();
             std::process::exit(101);
         }
     }));
     let code = match run() {
-        Ok(()) => 0,
+        Ok(()) => {
+            // Exited on purpose before a fresh update was confirmed: that
+            // start doesn't count against it.
+            if PROBATION_ACTIVE.load(Ordering::Relaxed) && !SELF_RESTARTED.load(Ordering::Relaxed) {
+                updater::forgive_attempt(&exe_dir());
+            }
+            0
+        }
         Err(e) => {
             log::error!("{e:#}");
             log::logger().flush();
             // A freshly installed update that can't start goes straight back
-            // to the previous version.
+            // to the previous version (not one that got the menu up and
+            // stopped later: that's no sign the old one would do better).
             let handed_over = SELF_RESTARTED.load(Ordering::Relaxed);
-            if !handed_over && PROBATION_ACTIVE.load(Ordering::Relaxed) && updater::on_probation(&exe_dir()) {
+            if !handed_over && !MENU_SHOWN.load(Ordering::Relaxed) && PROBATION_ACTIVE.load(Ordering::Relaxed) && updater::on_probation(&exe_dir()) {
+                win::release_instance();
                 if let Err(r) = updater::rollback(&exe_dir(), &format!("{e:#}")) {
                     log::error!("Rollback failed: {r:#}");
                 } else {
@@ -223,6 +263,8 @@ fn main() {
             if !handed_over {
                 let title = if MENU_RAN.load(Ordering::Relaxed) { "Rusty Popper stopped" } else { "Rusty Popper couldn't start" };
                 let rot = Settings::load(&exe_dir().join("rusty-popper.toml")).playfield.ui_rotation;
+                // A copy started meanwhile may take over.
+                win::release_instance();
                 errscreen::show(&exe_dir(), title, &format!("{e:#}"), rot);
             }
             1
@@ -239,12 +281,24 @@ fn run() -> Result<()> {
     // Only a real menu start counts as a try of a new version (not --list etc.).
     let ui_run = !(args.list || args.dry_run || args.print_launch);
     if ui_run {
+        let replacing = args.restarted > 0 || updater::on_probation(&exe_dir());
+        if !win::single_instance(if replacing { REPLACE_WAIT } else { SECOND_COPY_WAIT }) {
+            log::warn!("Rusty Popper is already running; this copy exits");
+            return Ok(());
+        }
         match updater::start_probation(&exe_dir()) {
-            updater::Probation::GiveUp => match updater::rollback(&exe_dir(), "the new version kept failing to start") {
-                Ok(()) => return Ok(()),
-                // Nothing to go back to: carry on with this version.
-                Err(e) => log::error!("Rollback failed, staying on {}: {e:#}", env!("CARGO_PKG_VERSION")),
-            },
+            updater::Probation::GiveUp => {
+                // The previous version starts now: let it take over.
+                win::release_instance();
+                match updater::rollback(&exe_dir(), "the new version kept failing to start") {
+                    Ok(()) => return Ok(()),
+                    // Nothing to go back to: carry on with this version.
+                    Err(e) => {
+                        log::error!("Rollback failed, staying on {}: {e:#}", env!("CARGO_PKG_VERSION"));
+                        win::single_instance(Duration::ZERO);
+                    }
+                }
+            }
             updater::Probation::OnProbation => PROBATION_ACTIVE.store(true, Ordering::Relaxed),
             updater::Probation::None => {}
         }
@@ -352,7 +406,8 @@ fn run() -> Result<()> {
         screens,
         card_screens,
         card: None,
-        notice: None,
+        // Shown (and timed) from the first frame: see `render`.
+        notice: settings.problem_notice().map(|m| (m, now)),
         updater: updater::Updater::new(settings.update.check, &settings.update.repo, &exe_dir()),
         update_confirmed: false,
         sounds: sfx::Sounds::load(
@@ -406,6 +461,7 @@ fn run() -> Result<()> {
         remote_cfg: settings.remote,
         remote_error: None,
         pending_power: None,
+        exit_after_game: false,
     };
     if app.remote_cfg.enabled {
         // A copy this one replaces (a restart, an update) may still hold the port.
@@ -418,7 +474,8 @@ fn run() -> Result<()> {
     MENU_UP.store(false, Ordering::Relaxed);
     ran?;
     if app.restart {
-        restart_self();
+        // Declined (too many in a row): the error screen says what went wrong.
+        let _ = restart_self();
     }
     match app.error {
         Some(e) => Err(e),
@@ -428,22 +485,28 @@ fn run() -> Result<()> {
 
 /// Starts a fresh copy of the menu after rendering broke for good (a display
 /// driver reset, say) or the menu crashed, so the cabinet isn't left on the
-/// desktop.
-fn restart_self() {
+/// desktop. Returns whether a fresh copy was started.
+fn restart_self() -> bool {
     let healthy = STARTED.get().is_some_and(|t| t.elapsed() >= HEALTHY_UPTIME);
     let restarted = if healthy { 0 } else { RESTARTED.load(Ordering::Relaxed) };
     if restarted >= MAX_RESTARTS {
-        log::error!("Rendering keeps failing after {restarted} restarts; giving up");
-        return;
+        log::error!("The menu keeps failing after {restarted} restarts; giving up");
+        return false;
     }
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else { return false };
     // The same arguments, with the restart count replaced.
     let passed = updater::passthrough_args();
     log::warn!("Restarting the menu (attempt {})", restarted + 1);
     std::thread::sleep(Duration::from_secs(2));
     match std::process::Command::new(exe).args(passed).arg("--restarted").arg((restarted + 1).to_string()).spawn() {
-        Ok(_) => SELF_RESTARTED.store(true, Ordering::Relaxed),
-        Err(e) => log::error!("Couldn't restart: {e}"),
+        Ok(_) => {
+            SELF_RESTARTED.store(true, Ordering::Relaxed);
+            true
+        }
+        Err(e) => {
+            log::error!("Couldn't restart: {e}");
+            false
+        }
     }
 }
 
@@ -735,15 +798,22 @@ struct ExitMenu {
     opened: Instant,
 }
 
-/// Restarts (`/r`) or shuts down (`/s`) Windows, then exits.
-fn power(el: &ActiveEventLoop, flag: &str) {
-    log::info!("Running shutdown {flag} /t 0");
+/// Asks Windows to restart (`/r`) or shut down (`/s`). `/f`: with `/t 0`
+/// it isn't implied, and a hung table would otherwise hold the shutdown up.
+fn power(flag: &str) -> Result<()> {
+    log::info!("Running shutdown {flag} /f /t 0");
     use std::os::windows::process::CommandExt;
-    // No console window flashing up.
-    if let Err(e) = std::process::Command::new("shutdown").args([flag, "/t", "0"]).creation_flags(rp_launch::CREATE_NO_WINDOW).spawn() {
-        log::error!("shutdown {flag} failed: {e}");
+    // No console window flashing up. shutdown.exe only hands the request
+    // over, so waiting for it is quick.
+    let status = std::process::Command::new("shutdown")
+        .args([flag, "/f", "/t", "0"])
+        .creation_flags(rp_launch::CREATE_NO_WINDOW)
+        .status()
+        .with_context(|| format!("running shutdown {flag}"))?;
+    if !status.success() {
+        bail!("shutdown {flag} exited with {status}");
     }
-    el.exit();
+    Ok(())
 }
 
 struct App {
@@ -840,6 +910,9 @@ struct App {
     /// A restart (`/r`) or shutdown (`/s`) from the phone, waiting for the
     /// game to close, and when it was asked for.
     pending_power: Option<(&'static str, Instant)>,
+    /// Windows asked the menu to close during a game: the game is being
+    /// closed properly first (close script, statistics, DOF).
+    exit_after_game: bool,
 }
 
 /// The app icon as a PNG (also the phone remote's page icon).
@@ -891,7 +964,18 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            // During a game, close it properly first (return_from_game then exits).
+            WindowEvent::CloseRequested => match self.playing.as_mut() {
+                Some(p) => {
+                    if !self.exit_after_game {
+                        log::info!("Asked to close during a game: closing the game first");
+                    }
+                    self.exit_after_game = true;
+                    p.ctl.request_stop();
+                    p.stop_pressed.get_or_insert_with(Instant::now);
+                }
+                None => el.exit(),
+            },
             // Synthetic presses are winit replaying held keys when focus moves
             // between our windows (e.g. a screen shown/hidden by a media swap);
             // acting on them made one Start press both switch playlist and launch.

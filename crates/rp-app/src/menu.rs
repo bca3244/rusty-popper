@@ -484,7 +484,7 @@ impl App {
         Ok(())
     }
 
-    fn save_settings(&self) {
+    fn save_settings(&mut self) {
         let v = settings::Editable {
             style: self.style,
             layout: self.layout,
@@ -503,6 +503,8 @@ impl App {
         };
         if let Err(e) = settings::save(&exe_dir().join("rusty-popper.toml"), &v) {
             log::warn!("Couldn't save settings: {e:#}");
+            // Say so: a file that can't be parsed fails every save.
+            self.notice = Some(("Couldn't save settings to rusty-popper.toml".into(), Instant::now()));
         }
     }
 
@@ -632,8 +634,12 @@ impl App {
                             self.menu = Some(ExitMenu { kind: MenuKind::Options, selected: 0, opened: Instant::now() });
                         }
                         (MenuKind::Exit, 2) => el.exit(),
-                        (MenuKind::Exit, 3) => power(el, "/r"),
-                        (MenuKind::Exit, 4) => power(el, "/s"),
+                        (MenuKind::Exit, 3) => {
+                            let _ = self.power_off(el, "/r");
+                        }
+                        (MenuKind::Exit, 4) => {
+                            let _ = self.power_off(el, "/s");
+                        }
                         _ => {}
                     }
                 }

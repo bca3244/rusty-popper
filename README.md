@@ -96,13 +96,13 @@ To install it, go to **Exit → Options → Install Update vX**. Rusty Popper th
 3. replaces its files all at once, keeping the old ones in `rollback\` (your `rusty-popper.toml` is never touched). If any file can't be replaced, nothing changes.
 4. restarts into the new version
 
-If the new version stops with an error during startup, or fails to stay up through three starts in a row, the old files are put back and the old version starts again. Once the new version has run for a minute it counts as good, and the download is cleaned up. `rollback\` keeps the previous version until the next update, so you can also go back by hand by copying its files over. Updates never install during a game.
+If the new version stops with an error during startup, or crashes three starts in a row, the old files are put back and the old version starts again (a start you end yourself, with Exit or a shutdown, doesn't count). Once the new version has run for a minute it counts as good, and the download is cleaned up. `rollback\` keeps the previous version until the next update, so you can also go back by hand by copying its files over. Updates never install during a game.
 
 To turn the startup check off, set `check = false` under `[update]` in `rusty-popper.toml`. To update by hand instead, download the new zip and copy `rusty-popper.exe` (and `libmpv-2.dll`, if it changed) over the old ones, keeping your own `rusty-popper.toml`.
 
 ## Settings
 
-`rusty-popper.toml` next to the exe holds your settings. Every setting is optional, and most can be changed in Options instead. `rusty-popper.example.toml` documents them all:
+`rusty-popper.toml` next to the exe holds your settings. Every setting is optional, and most can be changed in Options instead. A value that can't be read (a typo, a wrong type) is left at its default, and a line that isn't valid TOML costs only its own section; the wheel says what was ignored for a few seconds. If `[remote]` can't be read, the phone remote stays off. `rusty-popper.example.toml` documents them all:
 
 | Section | What's in it |
 |---|---|
@@ -120,7 +120,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 
 ## What it changes
 
-- **Popper's database:** only play statistics (last played, play count, time played), after plays of 20 seconds or more. The database is backed up to `backups\` next to the exe before the first write of each session, and the newest 10 backups are kept.
+- **Popper's database:** only play statistics (last played, play count, time played), after plays of 20 seconds or more. The database is backed up to `backups\` next to the exe before the first write of each session, and the newest 10 backups are kept. If that folder can't be written, the backup goes to `RustyPopper-backups` in the Windows temp folder instead.
 - **Next to the exe:**
   - `rusty-popper.log`, for troubleshooting
   - `rusty-popper.toml`, when you change Options

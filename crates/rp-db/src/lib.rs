@@ -320,42 +320,84 @@ impl Drop for PopperDb {
 pub struct StatsWriter {
     live: PathBuf,
     backup_dir: PathBuf,
+    /// Where the backup goes when `backup_dir` can't be written (the exe's
+    /// folder read-only, say).
+    fallback_dir: PathBuf,
     backed_up: bool,
+    /// Something to tell the player once (plays recorded with no backup).
+    warning: Option<String>,
+    warned: bool,
+}
+
+/// A consistent copy of `live` (VACUUM INTO) in `dir`, keeping the newest 10 there.
+fn backup_into(live: &Path, dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let name = format!("PUPDatabase-{}.db", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+    let dest = dir.join(name);
+    let conn = Connection::open_with_flags(live, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.execute("VACUUM INTO ?1", [dest.to_string_lossy()]).with_context(|| format!("backing up to {}", dest.display()))?;
+    let mut old: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("PUPDatabase-")))
+        .collect();
+    old.sort();
+    while old.len() > 10 {
+        let _ = std::fs::remove_file(old.remove(0));
+    }
+    Ok(dest)
 }
 
 impl StatsWriter {
     pub fn new(live: &Path, backup_dir: &Path) -> Self {
-        StatsWriter { live: live.to_path_buf(), backup_dir: backup_dir.to_path_buf(), backed_up: false }
+        let fallback_dir = std::env::temp_dir().join("RustyPopper-backups");
+        StatsWriter { live: live.to_path_buf(), backup_dir: backup_dir.to_path_buf(), fallback_dir, backed_up: false, warning: None, warned: false }
     }
 
     /// Consistent copy of the live DB (VACUUM INTO), keeping the newest 10.
     pub fn backup(&mut self) -> Result<PathBuf> {
-        std::fs::create_dir_all(&self.backup_dir)?;
-        let name = format!("PUPDatabase-{}.db", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-        let dest = self.backup_dir.join(name);
-        let conn = Connection::open_with_flags(&self.live, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute("VACUUM INTO ?1", [dest.to_string_lossy()])
-            .with_context(|| format!("backing up to {}", dest.display()))?;
-        let mut old: Vec<PathBuf> = std::fs::read_dir(&self.backup_dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("PUPDatabase-")))
-            .collect();
-        old.sort();
-        while old.len() > 10 {
-            let _ = std::fs::remove_file(old.remove(0));
-        }
+        let dest = backup_into(&self.live, &self.backup_dir)?;
         self.backed_up = true;
         Ok(dest)
+    }
+
+    /// The one-time warning, if there is one (taken, so it's shown once).
+    pub fn take_warning(&mut self) -> Option<String> {
+        self.warning.take()
+    }
+
+    /// Backs up before the first write: into `backup_dir`, else the temp
+    /// folder. If neither works the play is still recorded (losing every
+    /// play to a full or read-only disk would be worse), with a warning.
+    fn ensure_backup(&mut self) {
+        if self.backed_up {
+            return;
+        }
+        let e = match self.backup() {
+            Ok(_) => return,
+            Err(e) => e,
+        };
+        log::warn!("Couldn't back up PUPDatabase.db to {}: {e:#}", self.backup_dir.display());
+        match backup_into(&self.live, &self.fallback_dir) {
+            Ok(dest) => {
+                log::warn!("Backed up PUPDatabase.db to {} instead", dest.display());
+                self.backed_up = true;
+            }
+            Err(e) => {
+                log::warn!("Couldn't back up PUPDatabase.db to {} either: {e:#}; recording plays without a backup", self.fallback_dir.display());
+                if !self.warned {
+                    self.warned = true;
+                    self.warning = Some("Couldn't back up PUPDatabase.db (see the log)".into());
+                }
+            }
+        }
     }
 
     /// Counts one play of `game_id` lasting `secs` in GamesStats, like Popper:
     /// LastPlayed in local time ("YYYY-MM-DD HH:MM:SS.mmm"), NumberPlays + 1,
     /// TimePlayedSecs + secs.
     pub fn record_play(&mut self, game_id: i64, secs: u64) -> Result<()> {
-        if !self.backed_up {
-            self.backup()?;
-        }
+        self.ensure_backup();
         let mut conn = Connection::open(&self.live)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
@@ -414,6 +456,35 @@ mod tests {
         let orig: i64 = b.query_row("SELECT NumberPlays FROM GamesStats WHERE GameID = 7", [], |r| r.get(0)).unwrap();
         assert_eq!(orig, 3);
         drop((conn, b));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plays_are_recorded_even_when_the_backup_fails() {
+        let dir = std::env::temp_dir().join(format!("rp-db-nobackup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("PUPDatabase.db");
+        Connection::open(&live).unwrap().execute_batch("CREATE TABLE GamesStats (GameID INTEGER, LastPlayed DATETIME, NumberPlays INTEGER, TimePlayedSecs INTEGER);").unwrap();
+        // A file where the backup folder should be: it can't be created.
+        std::fs::write(dir.join("blocked"), "").unwrap();
+        let plays = |w: &mut StatsWriter| -> i64 {
+            w.record_play(3, 40).unwrap();
+            Connection::open(&live).unwrap().query_row("SELECT NumberPlays FROM GamesStats WHERE GameID = 3", [], |r| r.get(0)).unwrap()
+        };
+        // The temp-folder fallback takes the backup instead: no warning.
+        let mut w = StatsWriter::new(&live, &dir.join("blocked").join("backups"));
+        w.fallback_dir = dir.join("fallback");
+        assert_eq!(plays(&mut w), 1);
+        assert_eq!(std::fs::read_dir(dir.join("fallback")).unwrap().count(), 1);
+        assert!(w.take_warning().is_none());
+        // Neither works: still recorded, with one warning.
+        let mut w = StatsWriter::new(&live, &dir.join("blocked").join("backups"));
+        w.fallback_dir = dir.join("blocked").join("fallback");
+        assert_eq!(plays(&mut w), 2);
+        assert!(w.take_warning().is_some());
+        assert_eq!(plays(&mut w), 3);
+        assert!(w.take_warning().is_none(), "warned once");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

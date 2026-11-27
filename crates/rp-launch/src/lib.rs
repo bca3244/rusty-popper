@@ -726,20 +726,36 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// The pid in one of our temp file names (after the prefix): "<pid>.db",
+/// "<pid>-<n>.db" or "<label>-<pid>[-<n>].bat". None if it isn't one of ours.
+fn temp_file_pid(rest: &str) -> Option<Option<u32>> {
+    let (stem, pid_at) = match (rest.strip_suffix(".db"), rest.strip_suffix(".bat")) {
+        (Some(s), _) => (s, 0),
+        (_, Some(s)) => (s, 1),
+        _ => return None,
+    };
+    Some(stem.split('-').nth(pid_at).and_then(|p| p.parse().ok()))
+}
+
 /// Deletes temp files (.db copies, .bat scripts) left by earlier runs that
-/// didn't exit cleanly. Files of a running instance are skipped: its pid is
-/// in the name, and Windows refuses to delete what is open anyway.
+/// didn't exit cleanly. Files of a copy that is still running are skipped
+/// (its pid is in the name): a running game's scripts must stay.
 pub fn remove_stale_temp_files() {
-    let own = format!("{}-", std::process::id());
     let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    let mut sys = System::new().ok();
+    if let Some(s) = sys.as_mut() {
+        s.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    }
+    let running = |pid: u32| pid == std::process::id() || sys.as_ref().is_none_or(|s| s.process(Pid::from_u32(pid)).is_some());
     for entry in dir.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(rest) = name.strip_prefix(rp_db::TEMP_PREFIX) else { continue };
-        let ours = rest.ends_with(".db") || rest.ends_with(".bat");
-        // Names are "<pid>.db", "<pid>-<n>.db" or "<label>-<pid>[-<n>].bat".
-        let current = rest.starts_with(&own) || rest.contains(&format!("-{own}")) || rest.contains(&format!("-{}.", std::process::id()));
-        if ours && !current {
-            let _ = std::fs::remove_file(entry.path());
+        match temp_file_pid(rest) {
+            Some(Some(pid)) if running(pid) => {}
+            Some(_) => {
+                let _ = std::fs::remove_file(entry.path());
+            }
+            None => {}
         }
     }
 }
@@ -842,6 +858,17 @@ mod tests {
         assert!(m.can_track());
         assert!(m.matches(r"D:\Games\PinballFX\pinball fx.exe", "Pinball FX.exe"));
         assert!(!m.matches(r"D:\Games\PinballFX\other.exe", "other.exe"));
+    }
+
+    #[test]
+    fn temp_file_names_give_their_pid() {
+        assert_eq!(temp_file_pid("4242.db"), Some(Some(4242)));
+        assert_eq!(temp_file_pid("4242-3.db"), Some(Some(4242)));
+        assert_eq!(temp_file_pid("launch-4242-0.bat"), Some(Some(4242)));
+        assert_eq!(temp_file_pid("post-17.bat"), Some(Some(17)));
+        assert_eq!(temp_file_pid("odd.bat"), Some(None), "ours, but no pid: stale");
+        assert_eq!(temp_file_pid("backups"), None);
+        assert_eq!(temp_file_pid("4242.txt"), None);
     }
 
     #[test]

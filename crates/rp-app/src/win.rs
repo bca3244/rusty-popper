@@ -149,6 +149,49 @@ pub fn attach_parent_console() {
     }
 }
 
+/// The single-instance mutex while this copy holds it (0: not held).
+static INSTANCE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// Makes this the only running copy of the menu: waits up to `wait` for
+/// another copy to exit (one this replaces: a restart, an update) and
+/// returns false if it's still running then. Two copies would fight over
+/// the screens, and one would delete the other's temp files.
+pub fn single_instance(wait: std::time::Duration) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let name: Vec<u16> = "Local\\RustyPopperMenu\0".encode_utf16().collect();
+    let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if h.is_null() {
+        // Can't tell: better two copies than none.
+        return true;
+    }
+    // WAIT_ABANDONED: the last holder died without letting go; it's ours now.
+    match unsafe { WaitForSingleObject(h, wait.as_millis().min(u32::MAX as u128 - 1) as u32) } {
+        WAIT_OBJECT_0 | WAIT_ABANDONED => {
+            INSTANCE.store(h as isize, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+        _ => {
+            unsafe { CloseHandle(h) };
+            false
+        }
+    }
+}
+
+/// Lets a copy started next take over (before an error screen waits for a
+/// button, say). Exiting does this too.
+pub fn release_instance() {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::ReleaseMutex;
+    let h = INSTANCE.swap(0, std::sync::atomic::Ordering::Relaxed) as HANDLE;
+    if !h.is_null() {
+        unsafe {
+            ReleaseMutex(h);
+            CloseHandle(h);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
