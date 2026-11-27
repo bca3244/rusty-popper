@@ -28,6 +28,45 @@ impl App {
         let mut order: Vec<Screen> = self.screens.clone();
         order.sort_by_key(|s| (s.slot != Slot::PlayField) as u8);
 
+        // Start every player on its own thread while the windows are made:
+        // starting mpv takes a while, and only the GL part needs this thread.
+        let players: Vec<_> = order
+            .iter()
+            .map(|screen| {
+                let audio = screen.slot == Slot::PlayField;
+                let opts = vec![
+                    ("config", "no".to_string()),
+                    ("terminal", "no".to_string()),
+                    ("keepaspect", "no".to_string()),
+                    ("video-rotate", screen.rotation.to_string()),
+                    ("loop-file", "inf".to_string()),
+                    ("image-display-duration", "inf".to_string()),
+                    ("hwdec", "auto-safe".to_string()),
+                    ("osd-level", "0".to_string()),
+                    ("aid", if audio { "auto" } else { "no" }.to_string()),
+                    ("volume", if screen.slot == Slot::PlayField { self.video_volume() } else { screen.volume }.to_string()),
+                ];
+                let mpv = self.mpv.clone();
+                let slot = screen.slot;
+                std::thread::Builder::new().name("mpv-start".into()).spawn(move || {
+                    // Don't scan each video's folder for subtitles, audio tracks or cover art.
+                    // Plain scaling: the videos are shown at (or near) their own size,
+                    // where mpv's sharper filters cost a lot at 4K and show little.
+                    let optional = [
+                        ("sub-auto", "no"),
+                        ("audio-file-auto", "no"),
+                        ("cover-art-auto", "no"),
+                        ("scale", "bilinear"),
+                        ("dscale", "bilinear"),
+                        ("dither", "no"),
+                        ("correct-downscaling", "no"),
+                        ("sigmoid-upscaling", "no"),
+                    ];
+                    mpv.player(&opts, &optional).with_context(|| format!("{slot:?}"))
+                })
+            })
+            .collect();
+
         let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_stencil_size(8);
         let (pf_window, gl_config) = DisplayBuilder::new()
             .with_window_attributes(Some(window_attrs(&order[0])))
@@ -39,6 +78,8 @@ impl App {
             .map_err(|e| anyhow!("creating GL display: {e}"))?;
         let pf_window = pf_window.ok_or_else(|| anyhow!("no playfield window"))?;
         let display: Display = gl_config.display();
+        // A multisampled window can't take a framebuffer copy (glBlitFramebuffer).
+        let blit_ok = gl_config.num_samples() == 0;
 
         let mut windows = vec![pf_window];
         for s in &order[1..] {
@@ -62,30 +103,21 @@ impl App {
 
         let start_item = &self.lib.items[self.start];
         let mut outs = Vec::new();
-        for ((screen, window), surface) in order.into_iter().zip(windows).zip(surfaces) {
+        for (((screen, window), surface), player) in order.into_iter().zip(windows).zip(surfaces).zip(players) {
             context.make_current(&surface)?;
             // Only the playfield waits for vsync, so three swaps don't triple the frame time.
             // (The interval belongs to the shared context, so frame() sets it again
             // before each swap; this is just the starting state.)
             let interval = if screen.slot == Slot::PlayField { SwapInterval::Wait(NonZeroU32::new(1).unwrap()) } else { SwapInterval::DontWait };
             let _ = surface.set_swap_interval(&context, interval);
-            let audio = screen.slot == Slot::PlayField;
-            let opts = vec![
-                ("config", "no".to_string()),
-                ("terminal", "no".to_string()),
-                ("keepaspect", "no".to_string()),
-                ("video-rotate", screen.rotation.to_string()),
-                ("loop-file", "inf".to_string()),
-                ("image-display-duration", "inf".to_string()),
-                ("hwdec", "auto-safe".to_string()),
-                ("osd-level", "0".to_string()),
-                ("aid", if audio { "auto" } else { "no" }.to_string()),
-                ("volume", if screen.slot == Slot::PlayField { self.video_volume() } else { screen.volume }.to_string()),
-            ];
-            // Don't scan each video's folder for subtitles, audio tracks or cover art.
-            let optional = [("sub-auto", "no"), ("audio-file-auto", "no"), ("cover-art-auto", "no")];
-            let mut player = self.mpv.player(&opts, &optional).with_context(|| format!("{:?}", screen.slot))?;
+            let mut player = player
+                .map_err(|e| anyhow!("starting the {:?} player: {e}", screen.slot))?
+                .join()
+                .map_err(|_| anyhow!("starting the {:?} player panicked", screen.slot))??;
             player.init_gl(&loader)?;
+            // A new frame wakes the (otherwise sleeping) still menu.
+            let waker = self.waker.clone();
+            player.on_update(Arc::new(move || waker.frame_ready()));
             window.set_cursor_visible(false);
             let out = ScreenOut {
                 screen,
@@ -103,6 +135,9 @@ impl App {
                 dirty: Cell::new(true),
                 drawn_at: Cell::new(Instant::now()),
                 had_card: Cell::new(false),
+                loaded: RefCell::new(None),
+                ended: Cell::new(false),
+                vid_off: Cell::new(false),
             };
             out.load(start_item.media(out.screen.slot).as_deref());
             outs.push(out);
@@ -160,17 +195,18 @@ impl App {
             vsync_on: None,
             frame_period,
             pacer: perf::Pacer::new(),
+            blit_ok,
         };
         // Load logos nearest the starting game first.
         gfx.load_logos(&self.lib.items, self.start);
         perf::note("Creating windows and players", init_start, 500);
-        log::info!("Joysticks found: {}", gfx.joysticks.count());
         self.gfx = Some(gfx);
         Ok(())
     }
 
     pub(crate) fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let frame_start = Instant::now();
+        self.waker.woken();
         self.poll_remote(el);
         // A fresh update that has run for a minute has proved itself (also
         // when that minute ends mid-game: a game started from it and then a
@@ -232,13 +268,12 @@ impl App {
         // The selected game's own audio, once the wheel rests on it (attract mode included).
         let selected = self.gfx.as_ref().and_then(|g| self.view.get(g.wheel.selected()).copied());
         let lib = &self.lib;
-        self.game_audio.tick(selected, |i| {
-            let it = &lib.items[i];
-            if it.is_playlist() { None } else { gameaudio::find(&it.media_dir, &it.media_name) }
-        });
+        self.game_audio.tick(selected, |i| lib.items[i].audio());
         // An update downloaded from Options: swap it in and restart (never mid-game).
+        let update_status = self.updater.status();
         if self.playing.is_none() {
-            if let updater::Status::Staged { version, dir } = self.updater.status() {
+            if let updater::Status::Staged { version, dir } = &update_status {
+                let (version, dir) = (version.clone(), dir.clone());
                 // Mark it first: el.exit() only takes effect after this frame.
                 self.updater.restarting(version.clone());
                 // The new version opens DOF as it starts: ours must be over.
@@ -288,11 +323,23 @@ impl App {
         g.perf.part("input");
 
         // Upload any logos the loader finished, within a small time budget
-        // per frame so loading never costs a dropped frame.
-        g.context.make_current(&g.outs[0].surface)?;
+        // per frame so loading never costs a dropped frame: one logo at most
+        // while anything moves, and the playfield is redrawn for one that
+        // shows up on a still wheel.
+        let moving = animating || !g.wheel.at_rest() || g.outs.iter().any(|o| o.slide.is_some());
         let upload_start = Instant::now();
-        while upload_start.elapsed() < LOGO_UPLOAD_BUDGET {
+        let mut current = false;
+        let mut uploaded = 0;
+        while upload_start.elapsed() < LOGO_UPLOAD_BUDGET && !(moving && uploaded > 0) {
             let Some(logo) = g.logos.try_recv() else { break };
+            uploaded += 1;
+            if !current {
+                g.context.make_current(&g.outs[0].surface)?;
+                current = true;
+            }
+            if !moving && on_wheel(&self.view, g.wheel.selected(), logo.index) {
+                g.outs[0].dirty.set(true);
+            }
             let upload = |c: &mut Canvas<OpenGl>, img: &image::RgbaImage| {
                 use femtovg::rgb::FromSlice;
                 let (w, h) = img.dimensions();
@@ -328,10 +375,11 @@ impl App {
                 // Cover flow: freeze the outgoing frame and slide it away once
                 // the new video has a frame.
                 if slide && media.is_some() {
-                    if let Some(t) = &o.target {
+                    if let Some(t) = o.target.as_mut() {
                         g.context.make_current(&o.surface)?;
-                        t.freeze(&g.gl);
-                        o.slide = Some(video::Slide::new(dir));
+                        if t.freeze(&g.gl, &mut g.canvas) {
+                            o.slide = Some(video::Slide::new(dir));
+                        }
                     }
                 }
                 o.show(media.as_deref());
@@ -351,7 +399,6 @@ impl App {
         // video costs 60 frames a second, not the display's 144), like a
         // secondary screen. Either way there's a redraw every second as a
         // backstop.
-        video::reset_for_mpv(&g.gl);
         let card_out = self.card.as_ref().map(|c| c.out);
         let still = !animating && g.wheel.at_rest() && g.outs.iter().all(|o| o.slide.is_none());
         let pf_every_frame = !still || g.outs[0].target.is_none();
@@ -414,7 +461,11 @@ impl App {
                 }
             }
             let card = self.card.as_ref().filter(|c| c.out == i);
-            if o.target.is_some() || card.is_some() {
+            // Just the video: copied straight to the window, without femtovg.
+            let plain = card.is_none() && o.slide.is_none() && g.blit_ok;
+            if let (Some(t), true) = (&o.target, plain) {
+                t.copy_to_window(&g.gl);
+            } else if o.target.is_some() || card.is_some() {
                 g.canvas.set_size(o.screen.width as u32, o.screen.height as u32, 1.0);
                 if let Some(t) = &o.target {
                     let a = (o.screen.rotation as f32).to_radians();
@@ -429,11 +480,13 @@ impl App {
         }
         g.perf.part("other screens");
         if !present[0].1 {
-            // Still, and no new video frame yet: look again shortly.
+            // Still, and no new video frame yet: sleep until a player has one
+            // (its update callback wakes the loop), a key is pressed, or it's
+            // time to look at the joysticks again.
             if self.deadline.is_some_and(|d| Instant::now() >= d) {
                 el.exit();
             }
-            std::thread::sleep(STILL_POLL);
+            el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + STILL_POLL));
             return Ok(());
         }
         // Playfield: video, then the wheel on top, then present (waits for vsync).
@@ -475,7 +528,7 @@ impl App {
             playlist: self.lib.playlist_name(self.playlist),
             fonts: &g.fonts,
             letter,
-            update_note: match self.updater.status() {
+            update_note: match update_status {
                 updater::Status::Available(r) => Some(format!("UPDATE v{} AVAILABLE", r.version)),
                 updater::Status::Downloading { percent, .. } => Some(format!("DOWNLOADING UPDATE {percent}%")),
                 _ => None,
@@ -559,6 +612,13 @@ impl App {
     }
 }
 
+/// Whether item `item` is among the logos the wheel shows around view
+/// position `selected` (the wheel draws at most seven each side).
+fn on_wheel(view: &[usize], selected: usize, item: usize) -> bool {
+    let n = view.len() as i64;
+    n > 0 && (-7..=7).any(|k| view.get((selected as i64 + k).rem_euclid(n) as usize) == Some(&item))
+}
+
 /// Turns the canvas so drawing faces the player: on a cabinet the playfield
 /// is usually mounted turned, so the menu is rotated `rot` degrees clockwise.
 /// Returns the size of the screen as the player sees it.
@@ -570,4 +630,22 @@ pub(crate) fn face_player(canvas: &mut Canvas<OpenGl>, w: i32, h: i32, rot: i32)
         canvas.translate(-lw / 2.0, -lh / 2.0);
     }
     (lw, lh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::on_wheel;
+
+    #[test]
+    fn logos_near_the_selection_count_as_on_the_wheel() {
+        let view: Vec<usize> = (100..120).collect();
+        assert!(on_wheel(&view, 0, 100));
+        assert!(on_wheel(&view, 0, 107));
+        assert!(!on_wheel(&view, 0, 108));
+        // Wraps around both ends.
+        assert!(on_wheel(&view, 0, 119));
+        assert!(on_wheel(&view, 19, 106));
+        assert!(!on_wheel(&view, 10, 999));
+        assert!(!on_wheel(&[], 0, 0));
+    }
 }

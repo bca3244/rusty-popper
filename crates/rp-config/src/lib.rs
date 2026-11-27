@@ -10,20 +10,65 @@ use std::path::{Path, PathBuf};
 /// Media extensions Popper accepts, in lookup order.
 pub const MEDIA_EXTS: &[&str] = &["mp4", "f4v", "mkv", "avi", "mov", "apng", "gif", "png", "jpg"];
 
+/// Wheel logo extensions, in lookup order.
+pub const WHEEL_EXTS: &[&str] = &["png", "apng"];
+
 /// Finds the wheel logo `<emu media dir>\Wheel\<GameName>.png|apng`.
 pub fn find_wheel(emu_media_dir: &Path, game_name: &str) -> Option<PathBuf> {
-    ["png", "apng"]
-        .iter()
-        .map(|ext| emu_media_dir.join("Wheel").join(format!("{game_name}.{ext}")))
-        .find(|p| p.is_file())
+    find_in(emu_media_dir, "Wheel", game_name, WHEEL_EXTS)
 }
 
 /// Finds `<emu media dir>\<slot folder>\<GameName>.<ext>`.
 pub fn find_media(emu_media_dir: &Path, slot: Slot, game_name: &str) -> Option<PathBuf> {
-    MEDIA_EXTS
-        .iter()
-        .map(|ext| emu_media_dir.join(slot.media_folder()).join(format!("{game_name}.{ext}")))
-        .find(|p| p.is_file())
+    find_in(emu_media_dir, slot.media_folder(), game_name, MEDIA_EXTS)
+}
+
+/// Finds `<emu media dir>\<folder>\<name>.<ext>` for the first of `exts` on disk.
+pub fn find_in(emu_media_dir: &Path, folder: &str, name: &str, exts: &[&str]) -> Option<PathBuf> {
+    let dir = emu_media_dir.join(folder);
+    exts.iter().map(|ext| dir.join(format!("{name}.{ext}"))).find(|p| p.is_file())
+}
+
+/// The file names in some of an emulator's media folders, read once (one
+/// directory listing each), so finding a game's media doesn't probe the disk
+/// for every extension. Names match case-insensitively, as on Windows.
+#[derive(Debug, Default)]
+pub struct MediaIndex {
+    dir: PathBuf,
+    /// Lower-case folder names that were read.
+    folders: Vec<String>,
+    /// Lower-case `<folder>\<file name>` of every file in them.
+    files: std::collections::HashSet<String>,
+}
+
+impl MediaIndex {
+    /// Lists `folders` under `emu_media_dir` (a missing folder has no files).
+    pub fn read(emu_media_dir: &Path, folders: &[&str]) -> MediaIndex {
+        let mut files = std::collections::HashSet::new();
+        for folder in folders {
+            let Ok(list) = std::fs::read_dir(emu_media_dir.join(folder)) else { continue };
+            let key = folder.to_lowercase();
+            for entry in list.flatten() {
+                // A link counts if it leads to a file, as `is_file` says.
+                let file = entry.file_type().is_ok_and(|t| t.is_file() || (t.is_symlink() && entry.path().is_file()));
+                if file {
+                    files.insert(format!("{key}\\{}", entry.file_name().to_string_lossy().to_lowercase()));
+                }
+            }
+        }
+        MediaIndex { dir: emu_media_dir.to_path_buf(), folders: folders.iter().map(|f| f.to_lowercase()).collect(), files }
+    }
+
+    /// Like [`find_in`], from the listing (on disk for a folder not listed).
+    pub fn find(&self, folder: &str, name: &str, exts: &[&str]) -> Option<PathBuf> {
+        let key = folder.to_lowercase();
+        if !self.folders.contains(&key) {
+            return find_in(&self.dir, folder, name, exts);
+        }
+        let stem = format!("{key}\\{}.", name.to_lowercase());
+        let ext = exts.iter().find(|ext| self.files.contains(&format!("{stem}{}", ext.to_lowercase())))?;
+        Some(self.dir.join(folder).join(format!("{name}.{ext}")))
+    }
 }
 
 /// Popper screen slots. The index matches the `[INFOn]` section (`[INFO]` = 0).
@@ -202,6 +247,34 @@ mod tests {
         let mut ansi = b"; caf\xE9\r\n".to_vec();
         ansi.extend(INI.as_bytes());
         check(&screens_from_ini(&decode_ini(&ansi)));
+    }
+
+    #[test]
+    fn media_index_finds_what_the_disk_probe_finds() {
+        let dir = std::env::temp_dir().join(format!("rp-config-index-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in ["PlayField", "Wheel", "Topper", "Topper/Sub.mp4"] {
+            std::fs::create_dir_all(dir.join(f)).unwrap();
+        }
+        // Both formats there: the earlier one in MEDIA_EXTS wins, as on disk.
+        for f in ["PlayField/Attack (1980).png", "PlayField/Attack (1980).mp4", "PlayField/v1.2 Game.MKV", "Wheel/Zed.apng", "Other2/Zed.mp4"] {
+            std::fs::create_dir_all(dir.join(f).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let ix = MediaIndex::read(&dir, &["PlayField", "Wheel", "Topper", "BackGlass"]);
+        let pf = |name: &str| ix.find("PlayField", name, MEDIA_EXTS);
+        assert_eq!(pf("Attack (1980)"), Some(dir.join("PlayField").join("Attack (1980).mp4")));
+        assert_eq!(pf("Attack (1980)"), find_media(&dir, Slot::PlayField, "Attack (1980)"));
+        // Any case, like Windows (the path is spelled as asked, as the probe does).
+        assert_eq!(pf("V1.2 game"), Some(dir.join("PlayField").join("V1.2 game.mkv")));
+        assert_eq!(pf("Attack"), None);
+        assert_eq!(ix.find("Wheel", "Zed", WHEEL_EXTS), Some(dir.join("Wheel").join("Zed.apng")));
+        // A folder is not a file; a folder that isn't there has nothing.
+        assert_eq!(ix.find("Topper", "Sub", MEDIA_EXTS), None);
+        assert_eq!(ix.find("BackGlass", "Zed", MEDIA_EXTS), None);
+        // A folder that wasn't listed is looked up on disk.
+        assert_eq!(ix.find("Other2", "Zed", MEDIA_EXTS), Some(dir.join("Other2").join("Zed.mp4")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

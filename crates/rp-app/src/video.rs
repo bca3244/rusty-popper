@@ -16,8 +16,11 @@ pub const SLIDE_SECS: f32 = 0.45;
 pub struct Target {
     pub live: ImageId,
     live_fbo: glow::NativeFramebuffer,
-    snap: ImageId,
-    snap_fbo: glow::NativeFramebuffer,
+    /// The outgoing frame of a slide: made on the first slide, since only
+    /// Cover flow slides (a 4K screen's costs 33 MB of video memory).
+    snap: Option<(ImageId, glow::NativeFramebuffer)>,
+    /// Making `snap` failed: no slides on this screen.
+    snap_failed: bool,
     w: i32,
     h: i32,
 }
@@ -45,27 +48,59 @@ fn fbo_for(gl: &glow::Context, canvas: &Canvas<OpenGl>, img: ImageId) -> Result<
     }
 }
 
+fn image(canvas: &mut Canvas<OpenGl>, w: i32, h: i32) -> Result<ImageId> {
+    canvas.create_image_empty(w as usize, h as usize, PixelFormat::Rgba8, ImageFlags::empty()).map_err(|e| anyhow!("video image: {e:?}"))
+}
+
 impl Target {
     pub fn new(gl: &glow::Context, canvas: &mut Canvas<OpenGl>, w: i32, h: i32) -> Result<Self> {
-        let mk = |c: &mut Canvas<OpenGl>| {
-            c.create_image_empty(w as usize, h as usize, PixelFormat::Rgba8, ImageFlags::empty())
-                .map_err(|e| anyhow!("video image: {e:?}"))
-        };
-        let live = mk(canvas)?;
-        let snap = mk(canvas)?;
-        Ok(Target { live_fbo: fbo_for(gl, canvas, live)?, snap_fbo: fbo_for(gl, canvas, snap)?, live, snap, w, h })
+        let live = image(canvas, w, h)?;
+        Ok(Target { live_fbo: fbo_for(gl, canvas, live)?, live, snap: None, snap_failed: false, w, h })
     }
 
     pub fn fbo_id(&self) -> i32 {
         self.live_fbo.0.get() as i32
     }
 
-    /// Copies the current frame to the snapshot texture.
-    pub fn freeze(&self, gl: &glow::Context) {
+    /// Copies the current frame to the snapshot texture, for a slide.
+    /// False if there is no snapshot texture (then there's no slide).
+    pub fn freeze(&mut self, gl: &glow::Context, canvas: &mut Canvas<OpenGl>) -> bool {
+        if self.snap.is_none() && !self.snap_failed {
+            let made = image(canvas, self.w, self.h).and_then(|img| match fbo_for(gl, canvas, img) {
+                Ok(fbo) => Ok((img, fbo)),
+                Err(e) => {
+                    canvas.delete_image(img);
+                    Err(e)
+                }
+            });
+            match made {
+                Ok(s) => self.snap = Some(s),
+                Err(e) => {
+                    log::warn!("No slides on a {}x{} screen: {e:#}", self.w, self.h);
+                    self.snap_failed = true;
+                }
+            }
+        }
+        let Some((_, snap_fbo)) = self.snap else { return false };
         unsafe {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.live_fbo));
-            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.snap_fbo));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(snap_fbo));
             gl.blit_framebuffer(0, 0, self.w, self.h, 0, 0, self.w, self.h, glow::COLOR_BUFFER_BIT, glow::NEAREST);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        true
+    }
+
+    /// Copies the current frame to the current window as it is, the same
+    /// picture `composite` draws without a slide (the texture's first row is
+    /// the picture's top; the window's is its bottom).
+    pub fn copy_to_window(&self, gl: &glow::Context) {
+        unsafe {
+            // The only state a copy heeds; femtovg may leave it on.
+            gl.disable(glow::SCISSOR_TEST);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.live_fbo));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+            gl.blit_framebuffer(0, 0, self.w, self.h, 0, self.h, self.w, 0, glow::COLOR_BUFFER_BIT, glow::NEAREST);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
     }
@@ -73,7 +108,9 @@ impl Target {
     pub fn delete(&self, gl: &glow::Context) {
         unsafe {
             gl.delete_framebuffer(self.live_fbo);
-            gl.delete_framebuffer(self.snap_fbo);
+            if let Some((_, fbo)) = self.snap {
+                gl.delete_framebuffer(fbo);
+            }
         }
     }
 }
@@ -144,7 +181,9 @@ pub fn composite(canvas: &mut Canvas<OpenGl>, t: &Target, slide: &mut Option<Sli
     let out = -s.dir * e * dist;
     let inn = s.dir * (1.0 - e) * dist;
     canvas.save();
-    draw_image(canvas, t.snap, axis.0 * out, axis.1 * out, w, h);
+    if let Some((snap, _)) = t.snap {
+        draw_image(canvas, snap, axis.0 * out, axis.1 * out, w, h);
+    }
     if s.ready {
         draw_image(canvas, t.live, axis.0 * inn, axis.1 * inn, w, h);
     }

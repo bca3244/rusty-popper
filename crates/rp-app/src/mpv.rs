@@ -62,6 +62,19 @@ pub const EVENT_VIDEO_RECONFIG: i32 = 17;
 /// Playback (re)started after loading or seeking: the new file has frames.
 pub const EVENT_PLAYBACK_RESTART: i32 = 21;
 
+/// mpv's built-in Lua scripts (stats, console, youtube-dl hook...), none of
+/// which a menu uses: each would start its own Lua state in every player.
+/// Optional, since older builds don't know all of these.
+const LEAN: &[(&str, &str)] = &[
+    ("ytdl", "no"),
+    ("load-stats-overlay", "no"),
+    ("load-osd-console", "no"),
+    ("load-auto-profiles", "no"),
+    ("load-select", "no"),
+    ("load-commands", "no"),
+    ("load-positioning", "no"),
+];
+
 struct Api {
     _lib: Library,
     create: unsafe extern "C" fn() -> *mut MpvHandle,
@@ -78,6 +91,7 @@ struct Api {
     render_render: unsafe extern "C" fn(*mut RenderCtx, *mut RenderParam) -> c_int,
     render_free: unsafe extern "C" fn(*mut RenderCtx),
     render_update: unsafe extern "C" fn(*mut RenderCtx) -> u64,
+    render_set_update_callback: unsafe extern "C" fn(*mut RenderCtx, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
 }
 
 #[derive(Clone)]
@@ -108,6 +122,7 @@ impl Mpv {
                 render_render: sym!("mpv_render_context_render"),
                 render_free: sym!("mpv_render_context_free"),
                 render_update: sym!("mpv_render_context_update"),
+                render_set_update_callback: sym!("mpv_render_context_set_update_callback"),
                 _lib: lib,
             };
             Ok(Mpv(Arc::new(api)))
@@ -126,12 +141,12 @@ impl Mpv {
         if h.is_null() {
             bail!("mpv_create failed");
         }
-        let p = Player { api: self.clone(), h, render: std::ptr::null_mut(), last_tag: std::cell::Cell::new(0) };
+        let p = Player { api: self.clone(), h, render: std::ptr::null_mut(), last_tag: std::cell::Cell::new(0), on_update: None };
         p.set_option("vo", "libmpv")?;
         for (k, v) in options {
             p.set_option(k, v)?;
         }
-        for (k, v) in optional {
+        for (k, v) in LEAN.iter().chain(optional) {
             if let Err(e) = p.set_option(k, v) {
                 log::info!("Skipping {e:#}");
             }
@@ -157,13 +172,28 @@ unsafe extern "C" fn get_proc_trampoline(ctx: *mut c_void, name: *const c_char) 
     f(unsafe { CStr::from_ptr(name) }) as *mut c_void
 }
 
+/// Called (from one of mpv's threads) when a render context wants a redraw.
+pub type OnUpdate = Arc<dyn Fn() + Send + Sync>;
+
+unsafe extern "C" fn update_trampoline(ctx: *mut c_void) {
+    let f = unsafe { &*(ctx as *const OnUpdate) };
+    f()
+}
+
 pub struct Player {
     api: Mpv,
     h: *mut MpvHandle,
     render: *mut RenderCtx,
     /// The tag given to the last `show`, so its reply can be recognised.
     last_tag: std::cell::Cell<u64>,
+    /// The render context's update callback; boxed so mpv's pointer to it
+    /// stays valid when the player moves. Cleared before the context is freed.
+    on_update: Option<Box<OnUpdate>>,
 }
+
+// mpv's client API may be called from any thread. The render context is
+// only made (`init_gl`) and used on the GL thread, after any move.
+unsafe impl Send for Player {}
 
 impl Player {
     fn set_option(&self, k: &str, v: &str) -> Result<()> {
@@ -196,6 +226,20 @@ impl Player {
             bail!("mpv_render_context_create: {}", self.api.err(rc));
         }
         Ok(())
+    }
+
+    /// Calls `f` whenever mpv has a new frame (or otherwise wants a redraw),
+    /// so the menu can sleep until then instead of polling. `f` runs on one
+    /// of mpv's threads and must not call into mpv.
+    pub fn on_update(&mut self, f: OnUpdate) {
+        if self.render.is_null() {
+            return;
+        }
+        let boxed = Box::new(f);
+        let ctx = &*boxed as *const OnUpdate as *mut c_void;
+        unsafe { (self.api.0.render_set_update_callback)(self.render, Some(update_trampoline), ctx) };
+        // The old box (if any) is only dropped once mpv points at the new one.
+        self.on_update = Some(boxed);
     }
 
     /// Draws the current video frame into framebuffer 0. The GL context for
@@ -273,8 +317,10 @@ impl Player {
         Ok(())
     }
 
+    /// Pauses or resumes without waiting for mpv's core thread (a busy
+    /// player can take a while to answer; nothing here needs the reply).
     pub fn set_pause(&self, paused: bool) -> Result<()> {
-        self.command(&["set", "pause", if paused { "yes" } else { "no" }])
+        self.command_async(&["set", "pause", if paused { "yes" } else { "no" }])
     }
 
     /// Loads a file in a loop, or stops (black) when there is none, without
@@ -309,9 +355,13 @@ impl Player {
     /// Frees the render context. The GL context must be current.
     pub fn free_gl(&mut self) {
         if !self.render.is_null() {
+            // mpv calls the update callback under a lock this takes too: once
+            // it returns, the callback can't be running or called again.
+            unsafe { (self.api.0.render_set_update_callback)(self.render, None, std::ptr::null_mut()) };
             unsafe { (self.api.0.render_free)(self.render) };
             self.render = std::ptr::null_mut();
         }
+        self.on_update = None;
     }
 }
 

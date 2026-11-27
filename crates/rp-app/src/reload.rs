@@ -56,7 +56,8 @@ impl App {
         });
         match result {
             Ok(lib) if lib != self.lib => self.apply_library(lib),
-            Ok(_) => {}
+            // Nothing changed but the media folder listings, which are fresh.
+            Ok(lib) => self.lib.take_media(lib),
             // Keep showing what we have (the file may be mid-change; the next
             // change to it triggers another try).
             Err(e) => log::warn!("Couldn't re-read Popper's database: {e:#}"),
@@ -185,6 +186,9 @@ impl App {
             let a = self.aside.take().expect("checked above");
             log::info!("{} has closed: menu back", a.name);
             self.lib.forget_media();
+            // Fresh media folder listings (the media may have been recorded anew).
+            self.reload = None;
+            self.start_reload();
             self.dof.suspend(false);
             self.dof_shown = None;
             if let Some(g) = self.gfx.as_mut() {

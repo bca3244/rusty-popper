@@ -524,6 +524,7 @@ fn draw_track(cv: &mut Cv, t: &Track, f: &Frame) {
 #[allow(clippy::too_many_arguments)]
 fn draw_cover(cv: &mut Cv, e: &Entry, w: f32, hgt: f32, d: f32, alpha: f32, side_row: bool, reflect: bool, fonts: &Fonts) {
     const STRIPS: usize = 22;
+    const FAR_STRIPS: usize = 8;
     let a = d.abs();
     let a1 = a.min(1.0);
     let Some(logo) = (if a < 0.04 { None } else { e.logo.as_ref() }) else {
@@ -538,7 +539,7 @@ fn draw_cover(cv: &mut Cv, e: &Entry, w: f32, hgt: f32, d: f32, alpha: f32, side
     let dim = 1.0 - 0.4 * a1 - 0.06 * (a - 1.0).max(0.0);
     let strip_alpha = alpha * dim;
     // Covers further out are smaller and dimmer: fewer strips do.
-    let strips = if a > 1.5 { STRIPS / 2 } else { STRIPS };
+    let strips = if a > 1.5 { FAR_STRIPS } else { STRIPS };
     // A reflection this faint can't be seen.
     let reflect = reflect && strip_alpha >= 0.05;
     // The cover is sliced across the row; each slice is scaled for its depth.
