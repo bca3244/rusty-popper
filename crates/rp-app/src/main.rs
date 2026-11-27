@@ -131,7 +131,7 @@ static MENU_RAN: AtomicBool = AtomicBool::new(false);
 static MENU_SHOWN: AtomicBool = AtomicBool::new(false);
 /// How long a copy that replaces another (a restart, an update, a rollback)
 /// waits for it to exit; any other second copy waits only briefly.
-const REPLACE_WAIT: Duration = Duration::from_secs(20);
+const REPLACE_WAIT: Duration = Duration::from_secs(60);
 const SECOND_COPY_WAIT: Duration = Duration::from_secs(3);
 
 struct Args {
@@ -199,6 +199,15 @@ fn is_video(path: &Path) -> bool {
 
 fn main() {
     win::attach_parent_console();
+    // A copy started only to show the error of one that crashed. It never
+    // takes the single-instance mutex: a menu started meanwhile may run.
+    let mut argv = std::env::args().skip(1);
+    if argv.next().as_deref() == Some(ERROR_SCREEN_ARG) {
+        let (title, text) = (argv.next().unwrap_or_default(), argv.next().unwrap_or_default());
+        let rot = Settings::load(&exe_dir().join("rusty-popper.toml")).playfield.ui_rotation;
+        errscreen::show(&exe_dir(), &title, &text, rot);
+        std::process::exit(0);
+    }
     logging::init(&exe_dir().join("rusty-popper.log"));
     STARTED.get_or_init(Instant::now);
     std::panic::set_hook(Box::new(|info| {
@@ -221,12 +230,17 @@ fn main() {
                 }
                 win::release_instance();
                 let why = info.to_string();
-                let rot = Settings::load(&exe_dir().join("rusty-popper.toml")).playfield.ui_rotation;
-                // Its own thread: this one's message loop belongs to the
-                // menu's (now dead) windows.
-                let shown = std::thread::Builder::new().name("errscreen".into()).spawn(move || errscreen::show(&exe_dir(), "Rusty Popper stopped", &why, rot));
-                if let Ok(t) = shown {
-                    let _ = t.join();
+                // Shown by a copy of our own that does nothing else, so this
+                // one can exit at once: its videos and the game's audio
+                // would otherwise go on playing behind the error.
+                if !show_error_elsewhere("Rusty Popper stopped", &why) {
+                    let rot = Settings::load(&exe_dir().join("rusty-popper.toml")).playfield.ui_rotation;
+                    // Its own thread: this one's message loop belongs to the
+                    // menu's (now dead) windows.
+                    let shown = std::thread::Builder::new().name("errscreen".into()).spawn(move || errscreen::show(&exe_dir(), "Rusty Popper stopped", &why, rot));
+                    if let Ok(t) = shown {
+                        let _ = t.join();
+                    }
                 }
             }
             log::logger().flush();
@@ -283,7 +297,15 @@ fn run() -> Result<()> {
     if ui_run {
         let replacing = args.restarted > 0 || updater::on_probation(&exe_dir());
         if !win::single_instance(if replacing { REPLACE_WAIT } else { SECOND_COPY_WAIT }) {
-            log::warn!("Rusty Popper is already running; this copy exits");
+            if replacing {
+                // The copy this replaces hung on its way out: say so on
+                // screen (the error path) rather than leave whatever is up.
+                bail!("Rusty Popper is already running and didn't close");
+            }
+            // Started again (a shortcut, a second logon task): the running
+            // copy comes to the front instead.
+            let found = win::show_running_copy();
+            log::warn!("Rusty Popper is already running; this copy exits{}", if found { " (brought the running one forward)" } else { "" });
             return Ok(());
         }
         match updater::start_probation(&exe_dir()) {
@@ -480,6 +502,24 @@ fn run() -> Result<()> {
     match app.error {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+/// `rusty-popper.exe --error-screen <title> <text>`: only shows the error screen.
+const ERROR_SCREEN_ARG: &str = "--error-screen";
+
+/// Starts a copy of ours that shows the error screen (see `ERROR_SCREEN_ARG`).
+/// Returns whether it was started.
+fn show_error_elsewhere(title: &str, text: &str) -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    // Well inside the command line's limit.
+    let text: String = text.chars().take(4000).collect();
+    match std::process::Command::new(exe).arg(ERROR_SCREEN_ARG).arg(title).arg(text).spawn() {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("Couldn't start the error screen: {e}");
+            false
+        }
     }
 }
 
@@ -934,6 +974,7 @@ fn window_icon() -> Option<winit::window::Icon> {
 
 fn window_attrs(s: &Screen) -> winit::window::WindowAttributes {
     Window::default_attributes()
+        // The playfield's is win::PLAYFIELD_TITLE, which a second copy looks for.
         .with_title(format!("Rusty Popper {:?}", s.slot))
         .with_window_icon(window_icon())
         .with_decorations(false)
@@ -1032,6 +1073,12 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_copy_looks_for_the_playfield_title() {
+        let pf = Screen { slot: Slot::PlayField, x: 0, y: 0, width: 1920, height: 1080, rotation: 0, volume: 100 };
+        assert_eq!(window_attrs(&pf).title, win::PLAYFIELD_TITLE);
+    }
 
     #[test]
     fn option_choices_cycle() {

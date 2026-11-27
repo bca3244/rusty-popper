@@ -64,8 +64,9 @@ const REPLY_WAIT: Duration = Duration::from_secs(3);
 /// A command the menu thread gets to later than this is dropped: the page
 /// has been (or is about to be) told it failed, so it mustn't happen after
 /// all (a Shut Down reported as failed, then shutting down). Shorter than
-/// `REPLY_WAIT`, so a command taken in time is answered in time.
-const TAKE_WITHIN: Duration = Duration::from_millis(2500);
+/// `REPLY_WAIT` with room to spare, so a command taken in time is answered
+/// in time.
+const TAKE_WITHIN: Duration = Duration::from_millis(1500);
 /// Wheel images bigger than this aren't sent.
 const MAX_IMAGE: u64 = 8 << 20;
 /// How often the menu thread refreshes the settings the page shows.
@@ -908,8 +909,13 @@ impl crate::App {
                             p.stop_pressed = Some(std::time::Instant::now());
                             self.pending_power = Some((flag, std::time::Instant::now()));
                         }
+                        // Answered before shutdown.exe runs: waiting for it
+                        // could outlast the page's wait, and the page would
+                        // say it failed while the cabinet powers off. A
+                        // failure shows as a notice on the cabinet instead.
                         None => {
-                            let _ = reply.send(self.power_off(el, flag));
+                            let _ = reply.send(Ok(()));
+                            let _ = self.power_off(el, flag);
                         }
                     }
                 }

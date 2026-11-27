@@ -45,8 +45,10 @@ pub const RATE_CAP_CHOICES: &[u64] = &[0, 50, 100, 150, 200, 250, 300, 350, 400,
 pub const DEFAULT_RATE_CAP_MS: u64 = 100;
 
 /// Without a session it should have, the worker tries to start one again
-/// at most this often (on a new selection).
-const RETRY_EVERY: Duration = Duration::from_secs(30);
+/// (on a new selection) this long after the last try: longer after each
+/// failure in a row, as a try that fails can take a second or two and holds
+/// up the effects queued behind it. The last step repeats.
+const RETRY_AFTER: [Duration; 3] = [Duration::from_secs(30), Duration::from_secs(2 * 60), Duration::from_secs(10 * 60)];
 /// How long a launch waits for the menu's session to end before the table starts.
 pub const FINISH_WAIT: Duration = Duration::from_secs(2);
 
@@ -212,9 +214,11 @@ fn throttle(last: &mut Option<Instant>, gap: Duration, now: Instant) -> bool {
     true
 }
 
-/// Whether it's time to try for a session again (last tried at `last`).
-fn retry_due(last: Option<Instant>, now: Instant) -> bool {
-    last.is_none_or(|at| now.saturating_duration_since(at) >= RETRY_EVERY)
+/// Whether it's time to try for a session again (last tried at `last`,
+/// after `failures` failed tries in a row).
+fn retry_due(last: Option<Instant>, failures: u32, now: Instant) -> bool {
+    let wait = RETRY_AFTER[(failures.max(1) as usize - 1).min(RETRY_AFTER.len() - 1)];
+    last.is_none_or(|at| now.saturating_duration_since(at) >= wait)
 }
 
 fn worker(rx: Receiver<Cmd>) {
@@ -226,15 +230,19 @@ fn worker(rx: Receiver<Cmd>) {
     // A session is wanted (Start, no Finish since), and when one was last tried.
     let mut wanted = false;
     let mut tried: Option<Instant> = None;
-    let mut open = |link: &mut Option<com::Link>, held: &mut Option<String>, tried: &mut Option<Instant>| {
+    // Failed tries in a row (0 after a success).
+    let mut failures = 0u32;
+    let mut open = |link: &mut Option<com::Link>, held: &mut Option<String>, tried: &mut Option<Instant>, failures: &mut u32| {
         *tried = Some(Instant::now());
         match com::Link::open() {
             Ok((l, name)) => {
                 log::info!("DOF: session started via {name}");
                 *link = Some(l);
                 *held = None;
+                *failures = 0;
             }
             Err(e) => {
+                *failures = failures.saturating_add(1);
                 // Not installed or not registered: stay off, quietly.
                 if !warned {
                     log::info!("DOF: not available ({e:#}); lights stay off");
@@ -245,14 +253,14 @@ fn worker(rx: Receiver<Cmd>) {
     };
     for cmd in rx {
         // Lost (or never got) the session it should have: try again now and then.
-        if matches!(cmd, Cmd::Select) && wanted && link.is_none() && retry_due(tried, Instant::now()) {
-            open(&mut link, &mut held, &mut tried);
+        if matches!(cmd, Cmd::Select) && wanted && link.is_none() && retry_due(tried, failures, Instant::now()) {
+            open(&mut link, &mut held, &mut tried, &mut failures);
         }
         let result = match cmd {
             Cmd::Start => {
                 wanted = true;
                 if link.is_none() {
-                    open(&mut link, &mut held, &mut tried);
+                    open(&mut link, &mut held, &mut tried, &mut failures);
                 }
                 Ok(())
             }
@@ -439,9 +447,14 @@ mod tests {
     #[test]
     fn lost_sessions_are_retried_now_and_then() {
         let t = Instant::now();
-        assert!(retry_due(None, t));
-        assert!(!retry_due(Some(t), t + RETRY_EVERY - Duration::from_millis(1)));
-        assert!(retry_due(Some(t), t + RETRY_EVERY));
+        let ms = Duration::from_millis(1);
+        assert!(retry_due(None, 0, t));
+        // A lost session, then 1, 2, 3 and more failed tries in a row.
+        for (failures, wait) in [(0, 30), (1, 30), (2, 120), (3, 600), (9, 600)] {
+            let wait = Duration::from_secs(wait);
+            assert!(!retry_due(Some(t), failures, t + wait - ms), "{failures}");
+            assert!(retry_due(Some(t), failures, t + wait), "{failures}");
+        }
     }
 
     #[test]

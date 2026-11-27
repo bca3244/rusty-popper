@@ -133,6 +133,38 @@ pub fn force_foreground(hwnd: isize) -> bool {
     }
 }
 
+/// The menu's playfield window title (see `window_attrs`): how a second copy
+/// finds the one already running.
+pub const PLAYFIELD_TITLE: &str = "Rusty Popper PlayField";
+
+/// Brings the copy of the menu that's already running to the front (a second
+/// launch from a desktop shortcut, say), unless a game or other program
+/// fills its playfield: that's being played, and the menu stays behind it.
+/// Returns whether its window was found.
+pub fn show_running_copy() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let title: Vec<u16> = PLAYFIELD_TITLE.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+        if hwnd.is_null() {
+            return false;
+        }
+        // Hidden: a table started elsewhere has the screens.
+        if IsWindowVisible(hwnd) == 0 {
+            return true;
+        }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(hwnd, &mut r) == 0 {
+            return true;
+        }
+        // Some(..): the menu itself or a game is in front already.
+        if foreground_covering((r.left, r.top, r.right - r.left, r.bottom - r.top)).is_none() {
+            force_foreground(hwnd as isize);
+        }
+        true
+    }
+}
+
 /// Asks for the foreground without insisting (Windows may say no).
 pub fn request_foreground(hwnd: isize) {
     unsafe {

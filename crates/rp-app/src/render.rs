@@ -172,6 +172,13 @@ impl App {
     pub(crate) fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let frame_start = Instant::now();
         self.poll_remote(el);
+        // A fresh update that has run for a minute has proved itself (also
+        // when that minute ends mid-game: a game started from it and then a
+        // power switch is no failed start).
+        if !self.update_confirmed && STARTED.get().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
+            self.update_confirmed = true;
+            updater::confirm(&exe_dir());
+        }
         // While a game runs, keep our windows up behind it (black, with a
         // "Launching" screen on the playfield) so the desktop never shows.
         if self.playing.is_some() {
@@ -229,11 +236,6 @@ impl App {
             let it = &lib.items[i];
             if it.is_playlist() { None } else { gameaudio::find(&it.media_dir, &it.media_name) }
         });
-        // A fresh update that has run for a minute has proved itself.
-        if !self.update_confirmed && STARTED.get().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
-            self.update_confirmed = true;
-            updater::confirm(&exe_dir());
-        }
         // An update downloaded from Options: swap it in and restart (never mid-game).
         if self.playing.is_none() {
             if let updater::Status::Staged { version, dir } = self.updater.status() {
