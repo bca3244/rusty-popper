@@ -71,7 +71,7 @@ style = "arc"          # layout template: "arc", "flow", "minimal" or "vertical"
 # Rate Cap: the fewest milliseconds between two wheel/page pulses, so holding
 # a flipper doesn't fire the toys on every step. 0 (off) to 500;
 # Options -> DOF.
-# rate_cap_ms = 200
+# rate_cap_ms = 100
 
 [remote]
 # Phone remote: a small web page on your home network (what's playing; exit,

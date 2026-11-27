@@ -72,7 +72,7 @@ Rusty Popper uses the buttons you set up in **Popper's controller setup**, so yo
 - **Layout ›**, a submenu for how the wheel looks. *Template* picks Arc, Cover Flow, Minimal or Vertical and resets the rest to that template's values (the row says *(Changed)* once you've changed any of them). *Wheel Size* (60% to 150%), *Position* (Bottom, Left or Right), *Wheels Each Side* (0 to 5), *Wheel Spacing* (50% to 200%) and *Arc* (curve the row round a big wheel off the screen edge) can then be changed one by one. *Reset to Template* puts them back. You always get exactly the number of wheels you set; more than fit will overlap or run off the screen edge. W on a keyboard cycles the templates, which resets the layout too.
 - **Attract Mode ›**, a submenu with attract mode on or off, how long until it starts, and how long it stays on each game
 - **Sound ›**, a submenu with video sound, sound effects and game audio, each on or off with its own volume (a volume only shows while its sound is on). Game audio is the game's Popper Audio media (`POPMedia\<emulator>\Audio`), looped once the wheel rests on it for about a second. *Back* in either submenu returns to Options.
-- **DOF ›**, a submenu with DOF on or off (off by default; see below) and, while it's on, its **Rate Cap**: the fewest ms between wheel/page pulses, Off or 50 to 500 ms (default 200)
+- **DOF ›**, a submenu with DOF on or off (off by default; see below) and, while it's on, its **Rate Cap**: the fewest ms between wheel/page pulses, Off or 50 to 500 ms (default 100)
 - **Phone Remote** on or off (off by default; see below)
 - Install Update / Check for Updates
 
@@ -114,7 +114,7 @@ To turn the startup check off, set `check = false` under `[update]` in `rusty-po
 | `[attract]` | `enabled`, `idle_secs`, `interval_secs` |
 | `[audio]` | `volume` for the playfield video |
 | `[sound]` | Menu sound effects: `enabled`, `volume`, `dir`; game audio: `game_audio`, `game_audio_volume` |
-| `[dof]` | `enabled`: DOF for the menu, driving lights, flashers, shakers and other toys (default off); `rate_cap_ms`: Rate Cap, the fewest ms between wheel/page pulses (0 = off, up to 500; default 200) |
+| `[dof]` | `enabled`: DOF for the menu, driving lights, flashers, shakers and other toys (default off); `rate_cap_ms`: Rate Cap, the fewest ms between wheel/page pulses (0 = off, up to 500; default 100) |
 | `[remote]` | The phone remote: `enabled` (default off), `port` (8642), and optional `pin` and `address` |
 | `[update]` | `check` for updates at startup, and the `repo` they come from |
 

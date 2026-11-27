@@ -622,7 +622,7 @@ mod tests {
         assert!(s.attract.enabled);
         assert!(s.audio.enabled, "video sound is on by default");
         assert!(!s.dof.enabled, "DOF is off by default");
-        assert_eq!(s.dof.rate_cap_ms, 200);
+        assert_eq!(s.dof.rate_cap_ms, 100);
         assert!(!s.remote.enabled && s.remote.pin.is_none(), "the phone remote is off, with no PIN, by default");
         assert_eq!(s.remote.port, crate::remote::DEFAULT_PORT);
         assert_eq!(Settings::parse("[remote]\npin = 1234\n").unwrap().remote.pin.as_deref(), Some("1234"));
