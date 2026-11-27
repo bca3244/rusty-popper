@@ -158,6 +158,7 @@ impl App {
             display: font(&mut canvas, &["bahnschrift.ttf", "segoeuib.ttf", "arialbd.ttf"])?,
             body: font(&mut canvas, &["segoeui.ttf", "arial.ttf"])?,
             mono: font(&mut canvas, &["consola.ttf", "cour.ttf"])?,
+            text: Default::default(),
         };
 
         // Offscreen video targets (one context, so textures work on every surface).
@@ -186,6 +187,8 @@ impl App {
             fonts,
             entries: self.lib.items.iter().map(Item::entry).collect(),
             logos: assets::idle(),
+            logo_keep: Vec::new(),
+            logos_steered: None,
             wheel: wheel::Wheel::new(self.view.len(), start_pos),
             joysticks: input::Joysticks::new(),
             shown: self.start,
@@ -197,8 +200,8 @@ impl App {
             pacer: perf::Pacer::new(),
             blit_ok,
         };
-        // Load logos nearest the starting game first.
-        gfx.load_logos(&self.lib.items, self.start);
+        // The first frame asks for the logos nearest the starting game.
+        gfx.load_logos(&self.lib.items);
         perf::note("Creating windows and players", init_start, 500);
         self.gfx = Some(gfx);
         Ok(())
@@ -323,21 +326,30 @@ impl App {
         g.perf.part("input");
 
         // Upload any logos the loader finished, within a small time budget
-        // per frame so loading never costs a dropped frame: one logo at most
-        // while anything moves, and the playfield is redrawn for one that
-        // shows up on a still wheel.
+        // per frame so loading never costs a dropped frame: while anything
+        // moves, a few logos that are on the wheel now (so a letter jump
+        // doesn't sit on placeholders) or one that isn't, and the playfield
+        // is redrawn for one that shows up on a still wheel.
         let moving = animating || !g.wheel.at_rest() || g.outs.iter().any(|o| o.slide.is_some());
+        let budget = if moving { MOVING_UPLOAD_BUDGET } else { LOGO_UPLOAD_BUDGET };
         let upload_start = Instant::now();
         let mut current = false;
         let mut uploaded = 0;
-        while upload_start.elapsed() < LOGO_UPLOAD_BUDGET && !(moving && uploaded > 0) {
+        let mut off_wheel = false;
+        while upload_start.elapsed() < budget && !(moving && (off_wheel || uploaded >= MOVING_UPLOADS)) {
             let Some(logo) = g.logos.try_recv() else { break };
+            // One the wheel has scrolled far from since it was asked for isn't wanted now.
+            if !g.logo_keep.get(logo.index).copied().unwrap_or(true) {
+                continue;
+            }
             uploaded += 1;
             if !current {
                 g.context.make_current(&g.outs[0].surface)?;
                 current = true;
             }
-            if !moving && on_wheel(&self.view, g.wheel.selected(), logo.index) {
+            let shown = on_wheel(&self.view, g.wheel.selected(), logo.index);
+            off_wheel |= !shown;
+            if !moving && shown {
                 g.outs[0].dirty.set(true);
             }
             let upload = |c: &mut Canvas<OpenGl>, img: &image::RgbaImage| {
@@ -362,7 +374,7 @@ impl App {
         // flow slide to finish), so a single press loads straight away; while
         // scrolling fast, wait until the selection rests for a moment.
         let sel = self.view.get(g.wheel.selected()).copied().unwrap_or(g.shown);
-        g.logos.set_near(sel);
+        g.steer_logos(&self.view, g.wheel.selected());
         let settled = now - g.wheel.changed_at >= wheel::MEDIA_DEBOUNCE as f64;
         let paused = g.wheel.gap >= (wheel::MEDIA_DEBOUNCE + video::SLIDE_SECS) as f64;
         if sel != g.shown && (settled || paused) {
@@ -559,6 +571,7 @@ impl App {
             overlay::draw_notice(&mut g.canvas, lw, lh, text, at.elapsed().as_secs_f32(), &g.fonts);
         }
         g.canvas.restore();
+        g.fonts.text.borrow_mut().end_frame(&mut g.canvas);
         g.canvas.flush();
         g.perf.part("playfield draw");
         let busy = frame_start.elapsed();

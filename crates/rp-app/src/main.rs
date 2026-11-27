@@ -33,6 +33,7 @@ mod session;
 mod settings;
 mod sfx;
 mod sysload;
+mod textcache;
 mod updater;
 mod video;
 mod wheel;
@@ -91,8 +92,13 @@ const STILL_AFTER: Duration = Duration::from_millis(1200);
 /// of the housekeeping). A new video frame or a key wakes the loop at once.
 const STILL_POLL: Duration = Duration::from_millis(7);
 /// Time per frame for turning loaded logos into textures while the menu is
-/// still. While it moves, one logo per frame at most, so a frame never runs long.
+/// still (see `MOVING_UPLOAD_BUDGET` for while it moves).
 const LOGO_UPLOAD_BUDGET: Duration = Duration::from_millis(3);
+/// While anything moves: at most this long, and this many logos that are
+/// on the wheel now (a letter jump lands among games not loaded yet); one
+/// that isn't on the wheel ends the frame's uploads.
+const MOVING_UPLOAD_BUDGET: Duration = Duration::from_micros(1500);
+const MOVING_UPLOADS: usize = 4;
 /// A secondary screen with nothing new is still redrawn this often.
 const REDRAW_EVERY: Duration = Duration::from_secs(1);
 /// This many failed frames in a row (about ten seconds) and the menu restarts itself.
@@ -739,6 +745,10 @@ struct Gfx {
     fonts: wheel::Fonts,
     entries: Vec<wheel::Entry>,
     logos: assets::Loader,
+    /// The items whose logos stay loaded (near the selection; see
+    /// `steer_logos`), and the window of the view they were worked out for.
+    logo_keep: Vec<bool>,
+    logos_steered: Option<u64>,
     wheel: wheel::Wheel,
     joysticks: input::Joysticks,
     shown: usize,    // index whose media is on the screens
@@ -795,10 +805,42 @@ impl Gfx {
         }
     }
 
-    /// (Re)starts loading the logos that aren't in memory, nearest `near` first.
-    fn load_logos(&mut self, items: &[Item], near: usize) {
-        let paths = items.iter().zip(&self.entries).map(|(it, e)| if e.logo.is_some() { None } else { it.wheel_png.clone() }).collect();
-        self.logos = assets::spawn_loader(paths, near);
+    /// (Re)starts loading logos: those near the selection that aren't in
+    /// memory, as `steer_logos` asks for them on the next frame.
+    fn load_logos(&mut self, items: &[Item]) {
+        let paths = items.iter().map(|it| it.wheel_png.clone()).collect();
+        self.logos = assets::spawn_loader(paths, Some(exe_dir().join("cache").join("logos")));
+        self.logos_steered = None;
+    }
+
+    /// Keeps the logos near view position `sel` in memory: asks for those
+    /// within LOAD_AROUND places that aren't loaded, nearest first, and
+    /// frees those further than KEEP_AROUND (none on a small wheel). Only
+    /// does anything when the selection or the view around it changed.
+    fn steer_logos(&mut self, view: &[usize], sel: usize) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (sel, view.len()).hash(&mut h);
+        for p in assets::around(view.len(), sel, assets::LOAD_AROUND) {
+            view[p].hash(&mut h);
+        }
+        let key = h.finish();
+        if self.logos_steered == Some(key) {
+            return;
+        }
+        self.logos_steered = Some(key);
+        self.logo_keep = assets::near_set(view, sel, assets::KEEP_AROUND, self.entries.len());
+        // Freed images go at the next flush, with the playfield's context current.
+        for (e, &keep) in self.entries.iter_mut().zip(&self.logo_keep) {
+            if !keep {
+                if let Some(l) = e.logo.take() {
+                    self.canvas.delete_image(l.img);
+                    self.canvas.delete_image(l.glow);
+                }
+            }
+        }
+        let entries = &self.entries;
+        self.logos.want(view, sel, |i| entries[i].logo.is_some());
     }
 }
 

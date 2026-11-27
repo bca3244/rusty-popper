@@ -2,6 +2,13 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.58] - 2026-11-26
+
+### Changed
+- On a turned playfield the menu's text (game title, tags, counter, menus, the launch screen and the stand-in names for games without a wheel image) is drawn once into a picture whenever it changes, instead of letter by letter every frame. The idle wheel uses much less GPU and CPU; fades and slides look as before.
+- Only the wheel logos within 60 games of the selection are loaded, and those more than 120 away are freed again, so a big library no longer fills video memory with logos.
+- Wheel logos are kept, ready-made, in a `cache\logos` folder next to the exe, so the menu shows them much sooner at startup and after a game. The folder is trimmed to 512 MB, and logos no longer in the library are removed from it.
+
 ## [0.2.57] - 2026-11-26
 
 ### Changed

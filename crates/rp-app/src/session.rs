@@ -236,7 +236,7 @@ impl App {
             log::error!("Couldn't start the game thread: {e}");
             self.dof.suspend(false);
             if let Some(g) = self.gfx.as_mut() {
-                g.load_logos(&self.lib.items, g.shown);
+                g.load_logos(&self.lib.items);
             }
             self.launch_failed(index);
             return;
@@ -333,7 +333,7 @@ impl App {
                 o.resume(media.as_deref());
             }
         }
-        g.load_logos(&self.lib.items, g.shown);
+        g.load_logos(&self.lib.items);
         if take_focus {
             win::force_foreground(g.pf_hwnd);
         } else {
@@ -395,6 +395,7 @@ impl App {
         let verb = if launching { "Launching" } else { "Exiting" };
         wheel::draw_launch(&mut g.canvas, lw, lh, &g.entries[index], verb, item.emu_name(), t, &g.fonts);
         g.canvas.restore();
+        g.fonts.text.borrow_mut().end_frame(&mut g.canvas);
         g.canvas.flush();
         pf.surface.swap_buffers(&g.context)?;
         Ok(())
