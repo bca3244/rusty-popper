@@ -2,6 +2,11 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.52] - 2026-11-26
+
+### Changed
+- DOF: the wheel and page pulses can now come about three times a second (at least 350 ms apart) instead of twice. With DOF effects that stay on for a while, two a second only showed about one flash a second on the cabinet.
+
 ## [0.2.51] - 2026-11-26
 
 ### Changed
