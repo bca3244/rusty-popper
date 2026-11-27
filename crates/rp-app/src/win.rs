@@ -133,6 +133,38 @@ pub fn force_foreground(hwnd: isize) -> bool {
     }
 }
 
+/// The menu's playfield window title (see `window_attrs`): how a second copy
+/// finds the one already running.
+pub const PLAYFIELD_TITLE: &str = "Rusty Popper PlayField";
+
+/// Brings the copy of the menu that's already running to the front (a second
+/// launch from a desktop shortcut, say), unless a game or other program
+/// fills its playfield: that's being played, and the menu stays behind it.
+/// Returns whether its window was found.
+pub fn show_running_copy() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let title: Vec<u16> = PLAYFIELD_TITLE.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+        if hwnd.is_null() {
+            return false;
+        }
+        // Hidden: a table started elsewhere has the screens.
+        if IsWindowVisible(hwnd) == 0 {
+            return true;
+        }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(hwnd, &mut r) == 0 {
+            return true;
+        }
+        // Some(..): the menu itself or a game is in front already.
+        if foreground_covering((r.left, r.top, r.right - r.left, r.bottom - r.top)).is_none() {
+            force_foreground(hwnd as isize);
+        }
+        true
+    }
+}
+
 /// Asks for the foreground without insisting (Windows may say no).
 pub fn request_foreground(hwnd: isize) {
     unsafe {
@@ -146,6 +178,49 @@ pub fn request_foreground(hwnd: isize) {
 pub fn attach_parent_console() {
     unsafe {
         AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+/// The single-instance mutex while this copy holds it (0: not held).
+static INSTANCE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// Makes this the only running copy of the menu: waits up to `wait` for
+/// another copy to exit (one this replaces: a restart, an update) and
+/// returns false if it's still running then. Two copies would fight over
+/// the screens, and one would delete the other's temp files.
+pub fn single_instance(wait: std::time::Duration) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let name: Vec<u16> = "Local\\RustyPopperMenu\0".encode_utf16().collect();
+    let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if h.is_null() {
+        // Can't tell: better two copies than none.
+        return true;
+    }
+    // WAIT_ABANDONED: the last holder died without letting go; it's ours now.
+    match unsafe { WaitForSingleObject(h, wait.as_millis().min(u32::MAX as u128 - 1) as u32) } {
+        WAIT_OBJECT_0 | WAIT_ABANDONED => {
+            INSTANCE.store(h as isize, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+        _ => {
+            unsafe { CloseHandle(h) };
+            false
+        }
+    }
+}
+
+/// Lets a copy started next take over (before an error screen waits for a
+/// button, say). Exiting does this too.
+pub fn release_instance() {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::ReleaseMutex;
+    let h = INSTANCE.swap(0, std::sync::atomic::Ordering::Relaxed) as HANDLE;
+    if !h.is_null() {
+        unsafe {
+            ReleaseMutex(h);
+            CloseHandle(h);
+        }
     }
 }
 

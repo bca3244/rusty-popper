@@ -12,17 +12,20 @@
 //!   once per Rate Cap (Options → DOF; any of these events): a held flipper
 //!   steps the wheel up to ~28 times a second, and extra pulses are dropped,
 //!   not queued;
-//! - game launch: `Finish()`, so the table's own DOF can use the hardware;
-//!   back from the game: `Init` again. Exit: `Finish()`.
+//! - game launch: `Finish()`, so the table's own DOF can use the hardware
+//!   (the launch waits a moment for it); back from the game: `Init` again.
+//!   Exit (and a crash): `Finish()`.
 //!
 //! The COM object is PinUP's out-of-process `PinUPDOF.DOFLink` bridge when
 //! it's registered (as Popper uses; it works whatever our bitness), else
 //! DOF's own in-process `DirectOutput.ComObject` (needs its x64 registration).
 //! Everything runs on a worker thread: DOF's `Init` reads its config files
 //! and can take a second or two. If neither object is there, DOF stays off
-//! quietly (one line in the log).
+//! quietly (one line in the log); a new selection tries again now and then
+//! (PinUpDOF.exe started late, the bridge restarted).
 
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Popper's menu events (`E` + 799 + its button index).
@@ -41,11 +44,23 @@ const RANDOM_COUNT: u32 = 90;
 pub const RATE_CAP_CHOICES: &[u64] = &[0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 pub const DEFAULT_RATE_CAP_MS: u64 = 100;
 
+/// Without a session it should have, the worker tries to start one again
+/// (on a new selection) this long after the last try: longer after each
+/// failure in a row, as a try that fails can take a second or two and holds
+/// up the effects queued behind it. The last step repeats.
+const RETRY_AFTER: [Duration; 3] = [Duration::from_secs(30), Duration::from_secs(2 * 60), Duration::from_secs(10 * 60)];
+/// How long a launch waits for the menu's session to end before the table starts.
+pub const FINISH_WAIT: Duration = Duration::from_secs(2);
+
+/// The worker's queue, for ending the session from the panic hook.
+static WORKER: Mutex<Option<Sender<Cmd>>> = Mutex::new(None);
+
 enum Cmd {
     /// Start a DOF session (if there isn't one).
     Start,
-    /// End the DOF session (if there is one).
-    Finish,
+    /// End the DOF session (if there is one); the sender, if any, is told
+    /// when that's done.
+    Finish(Option<Sender<()>>),
     /// A new selection: hold a new random event.
     Select,
     Pulse(u32),
@@ -80,7 +95,12 @@ impl Dof {
         if self.tx.is_none() {
             let (tx, rx) = channel();
             match std::thread::Builder::new().name("dof".into()).spawn(move || worker(rx)) {
-                Ok(_) => self.tx = Some(tx),
+                Ok(_) => {
+                    if let Ok(mut w) = WORKER.lock() {
+                        *w = Some(tx.clone());
+                    }
+                    self.tx = Some(tx);
+                }
                 Err(e) => {
                     log::warn!("DOF: couldn't start its thread: {e}");
                     return;
@@ -96,21 +116,39 @@ impl Dof {
     pub fn set_enabled(&mut self, on: bool) {
         let was = self.active();
         self.enabled = on;
-        self.changed(was);
+        self.changed(was, None);
     }
 
     /// Ends the session while a game runs, and starts it again after.
     pub fn suspend(&mut self, suspended: bool) {
         let was = self.active();
         self.suspended = suspended;
-        self.changed(was);
+        self.changed(was, None);
     }
 
-    fn changed(&mut self, was: bool) {
+    /// Ends the session for a game. The receiver (if a session was going)
+    /// hears when it has ended, so the table's DOF doesn't start alongside ours.
+    pub fn suspend_for_game(&mut self) -> Option<Receiver<()>> {
+        let was = self.active();
+        self.suspended = true;
+        let (done_tx, done_rx) = channel();
+        self.changed(was, Some(done_tx));
+        (was && self.tx.is_some()).then_some(done_rx)
+    }
+
+    fn changed(&mut self, was: bool, done: Option<Sender<()>>) {
         match (was, self.active()) {
             (false, true) => self.send(Cmd::Start),
-            (true, false) => self.send(Cmd::Finish),
+            (true, false) => self.send(Cmd::Finish(done)),
             _ => {}
+        }
+    }
+
+    /// After `shutdown`: starts the session again if DOF is still wanted
+    /// (an update that couldn't be installed after all).
+    pub fn resume(&mut self) {
+        if self.active() && self.tx.is_none() {
+            self.send(Cmd::Start);
         }
     }
 
@@ -134,11 +172,29 @@ impl Dof {
     /// a moment for it.
     pub fn shutdown(&mut self) {
         if let Some(tx) = self.tx.take() {
-            let (done_tx, done_rx) = channel();
-            if tx.send(Cmd::Quit(done_tx)).is_ok() {
-                let _ = done_rx.recv_timeout(Duration::from_secs(3));
+            if let Ok(mut w) = WORKER.lock() {
+                w.take();
             }
+            quit(&tx);
         }
+    }
+}
+
+/// The same from the panic hook, which can't reach the menu's `Dof`: the
+/// toys mustn't stay lit, and the copy started next opens DOF itself.
+pub fn shutdown_all() {
+    // try_lock: never wait in the panic hook.
+    let tx = WORKER.try_lock().ok().and_then(|mut w| w.take());
+    if let Some(tx) = tx {
+        quit(&tx);
+    }
+}
+
+/// Stops the worker (ending the session), waiting a moment for it.
+fn quit(tx: &Sender<Cmd>) {
+    let (done_tx, done_rx) = channel();
+    if tx.send(Cmd::Quit(done_tx)).is_ok() {
+        let _ = done_rx.recv_timeout(Duration::from_secs(3));
     }
 }
 
@@ -158,32 +214,64 @@ fn throttle(last: &mut Option<Instant>, gap: Duration, now: Instant) -> bool {
     true
 }
 
+/// Whether it's time to try for a session again (last tried at `last`,
+/// after `failures` failed tries in a row).
+fn retry_due(last: Option<Instant>, failures: u32, now: Instant) -> bool {
+    let wait = RETRY_AFTER[(failures.max(1) as usize - 1).min(RETRY_AFTER.len() - 1)];
+    last.is_none_or(|at| now.saturating_duration_since(at) >= wait)
+}
+
 fn worker(rx: Receiver<Cmd>) {
     let _com = com::Apartment::enter();
     let mut link: Option<com::Link> = None;
     let mut held: Option<String> = None;
     let mut warned = false;
     let mut rng = seed();
+    // A session is wanted (Start, no Finish since), and when one was last tried.
+    let mut wanted = false;
+    let mut tried: Option<Instant> = None;
+    // Failed tries in a row (0 after a success).
+    let mut failures = 0u32;
+    let mut open = |link: &mut Option<com::Link>, held: &mut Option<String>, tried: &mut Option<Instant>, failures: &mut u32| {
+        *tried = Some(Instant::now());
+        match com::Link::open() {
+            Ok((l, name)) => {
+                log::info!("DOF: session started via {name}");
+                *link = Some(l);
+                *held = None;
+                *failures = 0;
+            }
+            Err(e) => {
+                *failures = failures.saturating_add(1);
+                // Not installed or not registered: stay off, quietly.
+                if !warned {
+                    log::info!("DOF: not available ({e:#}); lights stay off");
+                    warned = true;
+                }
+            }
+        }
+    };
     for cmd in rx {
+        // Lost (or never got) the session it should have: try again now and then.
+        if matches!(cmd, Cmd::Select) && wanted && link.is_none() && retry_due(tried, failures, Instant::now()) {
+            open(&mut link, &mut held, &mut tried, &mut failures);
+        }
         let result = match cmd {
-            Cmd::Start if link.is_none() => match com::Link::open() {
-                Ok((l, name)) => {
-                    log::info!("DOF: session started via {name}");
-                    link = Some(l);
-                    held = None;
-                    Ok(())
+            Cmd::Start => {
+                wanted = true;
+                if link.is_none() {
+                    open(&mut link, &mut held, &mut tried, &mut failures);
                 }
-                Err(e) => {
-                    // Not installed or not registered: stay off, quietly.
-                    if !warned {
-                        log::info!("DOF: not available ({e:#}); lights stay off");
-                        warned = true;
-                    }
-                    Ok(())
+                Ok(())
+            }
+            Cmd::Finish(done) => {
+                wanted = false;
+                let r = finish(&mut link);
+                if let Some(d) = done {
+                    let _ = d.send(());
                 }
-            },
-            Cmd::Start => Ok(()),
-            Cmd::Finish => finish(&mut link),
+                r
+            }
             Cmd::Select => match &link {
                 Some(l) => {
                     rng ^= rng << 13;
@@ -354,6 +442,19 @@ mod tests {
         d.suspend(true);
         d.suspend(false);
         assert!(d.tx.is_none());
+    }
+
+    #[test]
+    fn lost_sessions_are_retried_now_and_then() {
+        let t = Instant::now();
+        let ms = Duration::from_millis(1);
+        assert!(retry_due(None, 0, t));
+        // A lost session, then 1, 2, 3 and more failed tries in a row.
+        for (failures, wait) in [(0, 30), (1, 30), (2, 120), (3, 600), (9, 600)] {
+            let wait = Duration::from_secs(wait);
+            assert!(!retry_due(Some(t), failures, t + wait - ms), "{failures}");
+            assert!(retry_due(Some(t), failures, t + wait), "{failures}");
+        }
     }
 
     #[test]

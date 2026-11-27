@@ -2,6 +2,26 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.56] - 2026-11-26
+
+### Fixed
+- A typo in `rusty-popper.toml` no longer throws the whole file away. A value that can't be read (say `volume = 30.5`) falls back to its default on its own, and a line that isn't valid TOML (say `pin = 0420`) costs only its own section. The wheel says what was ignored for a few seconds, and also says so when Options can't save the file. If `[remote]` couldn't be read (its PIN may be in it), the phone remote stays off instead of starting without a PIN.
+- Restart and Shut Down now work even when a program holds Windows up, and if Windows refuses, the wheel says so instead of Rusty Popper exiting to the desktop. From the phone during a game that won't close, the game is now ended before the cabinet powers off.
+- The playfield could stay busy redrawing after a lot of scrolling one way (attract mode, a held flipper): the wheel now always comes to rest.
+- A phone remote button that timed out ("Rusty Popper didn't answer") no longer carries out its command later, and Restart and Shut Down from the phone no longer report a failure while the cabinet powers off (if Windows refuses, the wheel says so).
+- A slow or stalled phone connection can no longer hold up the phone remote for everyone.
+- A freshly installed update is only rolled back for starts that fail. Exiting or shutting down within the first minute, an error after the menu came up, or switching the cabinet off during a game started in that first minute, no longer counts against it.
+- A power cut in the middle of installing an update is now undone on the next start.
+- DOF now tries again (on a new selection) if it wasn't available at startup or the connection dropped, instead of staying dark until the next game: after 30 seconds, then less and less often (2 minutes, then every 10 minutes) while it keeps failing, so the tries don't hold up the effects.
+- The menu's DOF session now ends before a table starts its own, and also when Rusty Popper crashes or restarts into an update, so lights don't stay on.
+- The startup update check tries again a few times if the network isn't up yet, and a slow download no longer fails after ten minutes.
+- Starting Rusty Popper a second time while it runs no longer starts a second copy (which also deleted the first one's temp files); the running menu comes to the front instead (unless a game is being played). A restart or update whose old copy won't close within a minute now says so on screen.
+- Closing the menu's window during a game (Alt+F4) now closes the game properly first.
+- Play statistics are now recorded even when the database backup can't be made (the backup goes to the temp folder instead, or the wheel says it couldn't be made).
+- After too many crashes in a row the menu now shows what went wrong (or goes back to the previous version during an update's probation) instead of leaving the desktop. Its videos and the game's audio stop under that message.
+- Menu sounds come back if the audio device wasn't ready at startup or went away.
+- Update downloads are only unpacked into folders named after a plain version number.
+
 ## [0.2.55] - 2026-11-26
 
 ### Changed

@@ -88,10 +88,21 @@ impl Wheel {
 
     /// Advances the animation. Returns true when the selection changed.
     pub fn update(&mut self, dt: f32, now: f64) -> bool {
+        // Keep the numbers near zero (the same place on the wheel, whole
+        // turns back): far out, an f32 step rounds to nothing and the wheel
+        // would never come to rest (and the playfield never go still).
+        let turns = self.target.div_euclid(self.n) * self.n;
+        if turns != 0 {
+            self.target -= turns;
+            self.pos -= turns as f32;
+        }
         let behind = ((self.target as f32 - self.pos).abs() - 1.0).clamp(0.0, 3.0);
         let k = 1.0 - (-dt * SPRING * (1.0 + 0.5 * behind)).exp();
+        let before = self.pos;
         self.pos += (self.target as f32 - self.pos) * k;
-        if (self.target as f32 - self.pos).abs() < 0.0005 {
+        // Close enough, or so close that the step rounded to nothing.
+        let left = (self.target as f32 - self.pos).abs();
+        if left < 0.0005 || (dt > 0.0 && self.pos == before && left < 0.01) {
             self.pos = self.target as f32;
         }
         self.info_t += dt;
@@ -838,6 +849,27 @@ pub fn clear_black(cv: &mut Cv, w: u32, h: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_comes_to_rest_however_far_it_turned() {
+        // Thousands of steps one way (attract mode, a held flipper), at 144 Hz.
+        for (n, steps) in [(1usize, 5000i64), (7, -3001), (2500, 4000), (2500, -9000)] {
+            let mut w = Wheel::new(n, 0);
+            for _ in 0..steps.abs() {
+                w.step(steps.signum());
+                w.update(1.0 / 144.0, 0.0);
+            }
+            let want = w.selected();
+            let mut frames = 0;
+            while !w.at_rest() && frames < 2000 {
+                w.update(1.0 / 144.0, 0.0);
+                frames += 1;
+            }
+            assert!(w.at_rest(), "{n} games, {steps} steps: never settled at {} -> {}", w.pos, w.target);
+            assert_eq!(w.selected(), want);
+            assert!((0..n.max(1) as i64).contains(&w.target), "{}", w.target);
+        }
+    }
 
     #[test]
     fn every_layout_keeps_the_main_wheel_on_screen() {

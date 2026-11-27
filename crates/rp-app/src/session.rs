@@ -86,12 +86,19 @@ impl App {
         let (index, since) = (p.index, p.since);
         self.publish_remote(state, Some(index), Some(since), None);
         // A restart or shutdown from the phone doesn't wait forever on a game
-        // that won't close.
-        if self.pending_power.is_some_and(|(_, at)| at.elapsed() >= POWER_WAIT) {
-            let (flag, _) = self.pending_power.take().expect("checked above");
-            log::warn!("The game didn't close in time: {flag} anyway");
-            power(el, flag);
-            return Ok(());
+        // that won't close: its processes are ended (as a second Exit press
+        // would), and a while later the cabinet goes down anyway.
+        let Some(p) = self.playing.as_mut() else { return Ok(()) };
+        if let Some((flag, at)) = self.pending_power {
+            if at.elapsed() >= POWER_WAIT && !p.ctl.force_requested() {
+                log::warn!("The game didn't close in time: force-closing it before {flag}");
+                p.ctl.request_force();
+            } else if at.elapsed() >= POWER_WAIT + POWER_FORCE_WAIT {
+                log::warn!("The game still hasn't closed: {flag} anyway");
+                self.pending_power = None;
+                let _ = self.power_off(el, flag);
+                return Ok(());
+            }
         }
         let Some(p) = self.playing.as_mut() else { return Ok(()) };
         if let Some(g) = self.gfx.as_mut() {
@@ -167,7 +174,7 @@ impl App {
         // Keys held now are the game's from here on.
         self.key_repeat.clear();
         // The table's own DOF needs the hardware: end ours (as Popper does).
-        self.dof.suspend(true);
+        let dof_done = self.dof.suspend_for_game();
         let job = rp_launch::LaunchJob { popper_dir: self.popper_dir.clone(), emulator: (**emu).clone(), game: (**game).clone(), ignore: self.ignore_processes.clone() };
         // Make sure every screen shows this game's media while it loads.
         if g.shown != index {
@@ -187,6 +194,13 @@ impl App {
         let stats = self.stats.clone();
         let game_id = game.id;
         let spawned = std::thread::Builder::new().name("game".into()).spawn(move || {
+            // Our DOF session must be over before the table opens its own
+            // (it may still be starting up: Init takes a second or two).
+            if let Some(done) = dof_done {
+                if done.recv_timeout(dof::FINISH_WAIT).is_err() {
+                    log::warn!("DOF: the menu's session didn't end in time; starting the game anyway");
+                }
+            }
             let result = job.run(&worker_ctl);
             match &result {
                 Ok(rp_launch::Outcome::Finished { secs }) if *secs >= MIN_PLAY_SECS => {
@@ -233,6 +247,23 @@ impl App {
         });
     }
 
+    /// Restarts (`/r`) or shuts down (`/s`) the cabinet and exits, or, if
+    /// Windows wouldn't take the request, says so on the wheel and stays.
+    pub(crate) fn power_off(&mut self, el: &ActiveEventLoop, flag: &str) -> Result<(), String> {
+        match power(flag) {
+            Ok(()) => {
+                el.exit();
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("{e:#}");
+                let what = if flag == "/r" { "Couldn't restart the cabinet" } else { "Couldn't shut down the cabinet" };
+                self.notice = Some((what.into(), Instant::now()));
+                Err(what.into())
+            }
+        }
+    }
+
     /// Tells the player on the wheel that a game didn't start (instead of a
     /// silent return to the wheel).
     pub(crate) fn launch_failed(&mut self, index: usize) {
@@ -244,6 +275,10 @@ impl App {
     /// `take_focus`) the keyboard focus, even from another program.
     pub(crate) fn return_from_game(&mut self, el: &ActiveEventLoop, take_focus: bool) {
         self.playing = None;
+        // Play statistics recorded without a backup of Popper's database: say so once.
+        if let Some(why) = self.stats.lock().ok().and_then(|mut s| s.take_warning()) {
+            self.notice = Some((why, Instant::now()));
+        }
         self.dof.suspend(false);
         self.dof_shown = None;
         el.set_control_flow(ControlFlow::Poll);
@@ -284,9 +319,12 @@ impl App {
         self.key_repeat.clear();
         self.joy_blocked = false;
         g.last = now;
-        // The phone remote asked for a restart or shutdown during the game.
+        // The phone remote asked for a restart or shutdown during the game,
+        // or Windows asked the menu to close.
         if let Some((flag, _)) = self.pending_power.take() {
-            power(el, flag);
+            let _ = self.power_off(el, flag);
+        } else if self.exit_after_game {
+            el.exit();
         }
     }
 

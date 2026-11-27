@@ -39,6 +39,10 @@ const TICK: Duration = Duration::from_secs(1);
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 /// A phone that stops reading or writing for this long is dropped.
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// The whole request head must arrive within this: the per-read timeout
+/// alone lets a client send a byte every few seconds and keep its
+/// connection (and with `MAX_CONNECTIONS` of them, the remote) forever.
+const HEAD_DEADLINE: Duration = Duration::from_secs(10);
 /// A request's head (request line and headers) may be at most this big.
 const MAX_HEAD: usize = 8 << 10;
 /// Requests answered at once; more connections are closed unanswered.
@@ -57,6 +61,12 @@ const ADDRESS_EVERY: Duration = Duration::from_secs(20);
 const LOAD_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// How long a command waits for the menu thread to take it.
 const REPLY_WAIT: Duration = Duration::from_secs(3);
+/// A command the menu thread gets to later than this is dropped: the page
+/// has been (or is about to be) told it failed, so it mustn't happen after
+/// all (a Shut Down reported as failed, then shutting down). Shorter than
+/// `REPLY_WAIT` with room to spare, so a command taken in time is answered
+/// in time.
+const TAKE_WITHIN: Duration = Duration::from_millis(1500);
 /// Wheel images bigger than this aren't sent.
 const MAX_IMAGE: u64 = 8 << 20;
 /// How often the menu thread refreshes the settings the page shows.
@@ -137,6 +147,13 @@ pub struct SettingsView {
 
 /// A command from the page, and where to say whether it was taken.
 pub type Request = (Command, SyncSender<Result<(), String>>);
+/// A request on its way to the menu thread, with when it was sent.
+type Queued = (Request, std::time::Instant);
+
+/// Whether a command sent at `at` is too old to carry out at `now`.
+fn stale(at: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(at) >= TAKE_WITHIN
+}
 
 /// A game's details for the page.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
@@ -189,7 +206,7 @@ struct Shared {
 /// The running web server.
 pub struct Remote {
     shared: Arc<Shared>,
-    rx: Receiver<Request>,
+    rx: Receiver<Queued>,
     thread: Option<JoinHandle<()>>,
     /// The last thing published, to skip unchanged snapshots.
     last_key: Option<(u8, usize)>,
@@ -287,9 +304,16 @@ impl Remote {
         self.last_key = None;
     }
 
-    /// The next command from the page, if any.
+    /// The next command from the page, if any (skipping any that waited
+    /// too long: the menu thread was busy, say loading a big table).
     pub fn try_recv(&self) -> Option<Request> {
-        self.rx.try_recv().ok()
+        loop {
+            let ((cmd, reply), at) = self.rx.try_recv().ok()?;
+            if !stale(at, std::time::Instant::now()) {
+                return Some((cmd, reply));
+            }
+            log::warn!("Phone remote: dropping {cmd:?}, it came too late");
+        }
     }
 }
 
@@ -329,7 +353,7 @@ struct PinGuard {
 
 /// The server thread: accepts connections until told to stop, answering
 /// each on a short-lived thread so a slow or stalled phone holds up nobody.
-fn serve(listener: TcpListener, shared: Arc<Shared>, tx: Sender<Request>, port: u16) {
+fn serve(listener: TcpListener, shared: Arc<Shared>, tx: Sender<Queued>, port: u16) {
     let mut address_checked = std::time::Instant::now();
     let mut load_checked = std::time::Instant::now();
     while !shared.stop.load(Ordering::Relaxed) {
@@ -454,13 +478,37 @@ fn read_request(stream: &mut impl Read) -> Result<Req, BadRequest> {
     Ok(req)
 }
 
+/// Reads from a socket until a deadline, however slowly the bytes come.
+struct Deadline<'a> {
+    stream: &'a TcpStream,
+    until: std::time::Instant,
+}
+
+impl<'a> Deadline<'a> {
+    fn new(stream: &'a TcpStream, limit: Duration) -> Self {
+        Deadline { stream, until: std::time::Instant::now() + limit }
+    }
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left.min(IO_TIMEOUT)))?;
+        let mut s = self.stream;
+        s.read(buf)
+    }
+}
+
 /// Answers one connection: one request, then close.
-fn connection(mut stream: TcpStream, shared: &Shared, tx: &Sender<Request>) {
+fn connection(mut stream: TcpStream, shared: &Shared, tx: &Sender<Queued>) {
     // Accepted sockets may inherit the listener's non-blocking mode.
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-    let response = match read_request(&mut stream) {
+    let response = match read_request(&mut Deadline::new(&stream, HEAD_DEADLINE)) {
         Ok(req) => handle(&req, shared, tx),
         Err(BadRequest::Gone) => return,
         Err(BadRequest::Status(code, why)) => text(code, why),
@@ -470,7 +518,7 @@ fn connection(mut stream: TcpStream, shared: &Shared, tx: &Sender<Request>) {
     let _ = stream.shutdown(std::net::Shutdown::Write);
 }
 
-fn handle(req: &Req, shared: &Shared, tx: &Sender<Request>) -> Response {
+fn handle(req: &Req, shared: &Shared, tx: &Sender<Queued>) -> Response {
     let path = req.path.as_str();
     let (get, post) = (req.method == "GET", req.method == "POST");
     if !host_ok(&req.host, shared.address.as_deref()) {
@@ -661,9 +709,9 @@ fn command_of(path: &str, query: &str) -> Option<Command> {
 }
 
 /// Hands a command to the menu thread and waits for its answer.
-fn run_command(cmd: Command, tx: &Sender<Request>) -> Response {
+fn run_command(cmd: Command, tx: &Sender<Queued>) -> Response {
     let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
-    if tx.send((cmd, reply_tx)).is_err() {
+    if tx.send(((cmd, reply_tx), std::time::Instant::now())).is_err() {
         return text(503, "Rusty Popper is closing");
     }
     match reply_rx.recv_timeout(REPLY_WAIT) {
@@ -808,6 +856,12 @@ impl crate::App {
         if self.remote.is_some() {
             return;
         }
+        // It could be missing its PIN: not without it.
+        if self.remote_cfg.unreadable {
+            log::warn!("Phone remote: not started, [remote] in rusty-popper.toml couldn't be read");
+            self.remote_error = Some("[remote] unreadable".into());
+            return;
+        }
         let c = &self.remote_cfg;
         match Remote::start(c.port, c.pin.clone(), c.address.clone(), wait) {
             Ok(r) => self.remote = Some(r),
@@ -845,17 +899,24 @@ impl crate::App {
                 }
                 Command::Restart | Command::Shutdown => {
                     let flag = if cmd == Command::Restart { "/r" } else { "/s" };
-                    let _ = reply.send(Ok(()));
                     match self.playing.as_mut() {
                         // Close the game properly first (its close script, the
                         // play statistics); return_from_game then powers off.
                         Some(p) => {
+                            let _ = reply.send(Ok(()));
                             log::info!("Phone remote: closing the game before {flag}");
                             p.ctl.request_stop();
                             p.stop_pressed = Some(std::time::Instant::now());
                             self.pending_power = Some((flag, std::time::Instant::now()));
                         }
-                        None => crate::power(el, flag),
+                        // Answered before shutdown.exe runs: waiting for it
+                        // could outlast the page's wait, and the page would
+                        // say it failed while the cabinet powers off. A
+                        // failure shows as a notice on the cabinet instead.
+                        None => {
+                            let _ = reply.send(Ok(()));
+                            let _ = self.power_off(el, flag);
+                        }
                     }
                 }
             }
@@ -1076,6 +1137,38 @@ mod tests {
         drop(remote);
         assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
         std::net::TcpListener::bind(("0.0.0.0", port)).expect("port free after stop");
+    }
+
+    #[test]
+    fn slow_request_heads_are_cut_off() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // A byte every 50 ms never finishes the head: the deadline ends it.
+        let client = std::thread::spawn(move || {
+            let mut s = std::net::TcpStream::connect(addr).unwrap();
+            for _ in 0..40 {
+                if s.write_all(b"G").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let (server, _) = listener.accept().unwrap();
+        let t = std::time::Instant::now();
+        assert_eq!(read_request(&mut Deadline::new(&server, Duration::from_millis(400))).unwrap_err(), BadRequest::Gone);
+        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+        drop(server);
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn late_commands_are_dropped() {
+        let t = std::time::Instant::now();
+        assert!(!stale(t, t));
+        assert!(!stale(t, t + TAKE_WITHIN - Duration::from_millis(1)));
+        assert!(stale(t, t + TAKE_WITHIN));
+        assert!(TAKE_WITHIN < REPLY_WAIT, "a command taken in time is answered in time");
     }
 
     #[test]

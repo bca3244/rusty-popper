@@ -172,6 +172,13 @@ impl App {
     pub(crate) fn frame(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let frame_start = Instant::now();
         self.poll_remote(el);
+        // A fresh update that has run for a minute has proved itself (also
+        // when that minute ends mid-game: a game started from it and then a
+        // power switch is no failed start).
+        if !self.update_confirmed && STARTED.get().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
+            self.update_confirmed = true;
+            updater::confirm(&exe_dir());
+        }
         // While a game runs, keep our windows up behind it (black, with a
         // "Launching" screen on the playfield) so the desktop never shows.
         if self.playing.is_some() {
@@ -229,16 +236,13 @@ impl App {
             let it = &lib.items[i];
             if it.is_playlist() { None } else { gameaudio::find(&it.media_dir, &it.media_name) }
         });
-        // A fresh update that has run for a minute has proved itself.
-        if !self.update_confirmed && STARTED.get().is_some_and(|t| t.elapsed() > Duration::from_secs(60)) {
-            self.update_confirmed = true;
-            updater::confirm(&exe_dir());
-        }
         // An update downloaded from Options: swap it in and restart (never mid-game).
         if self.playing.is_none() {
             if let updater::Status::Staged { version, dir } = self.updater.status() {
                 // Mark it first: el.exit() only takes effect after this frame.
                 self.updater.restarting(version.clone());
+                // The new version opens DOF as it starts: ours must be over.
+                self.dof.shutdown();
                 match updater::apply_and_restart(&dir, &exe_dir(), &version) {
                     Ok(()) => {
                         el.exit();
@@ -247,6 +251,8 @@ impl App {
                     Err(e) => {
                         log::error!("Installing the update failed: {e:#}");
                         self.updater.fail(format!("{e:#}"));
+                        self.dof.resume();
+                        self.dof_shown = None;
                     }
                 }
             }
@@ -523,6 +529,11 @@ impl App {
                 o.window.set_visible(o.screen.slot == Slot::PlayField || item.media(o.screen.slot).is_some());
             }
             g.outs[0].window.focus_window();
+            // A notice from startup (settings that couldn't be read) is timed from now.
+            if let Some(n) = self.notice.as_mut() {
+                n.1 = Instant::now();
+            }
+            MENU_SHOWN.store(true, Ordering::Relaxed);
         }
 
         if self.deadline.is_some_and(|d| Instant::now() >= d) {
