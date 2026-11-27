@@ -123,6 +123,9 @@ pub struct SettingsView {
     pub game_audio: bool,
     pub game_audio_volume: i32,
     pub dof: bool,
+    /// DOF's Rate Cap (ms between wheel pulses) and its choices.
+    pub dof_rate_cap: u64,
+    pub rate_cap_choices: &'static [u64],
     /// Where updates stand, as Options words it.
     pub update: String,
     /// What the update button does now: "install", "check" or "" (busy).

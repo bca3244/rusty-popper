@@ -264,6 +264,7 @@ impl App {
             Some(MenuKind::Sound) => self.sound_labels(),
             Some(MenuKind::Layout) => self.layout_labels(),
             Some(MenuKind::Attract) => self.attract_labels(),
+            Some(MenuKind::Dof) => self.dof_labels(),
             Some(MenuKind::Options) => self.option_labels(),
             Some(MenuKind::Exit) | None => Vec::new(),
         };
@@ -479,7 +480,7 @@ impl App {
         if let Some(menu) = &self.menu {
             let names: Vec<&str> = match menu.kind {
                 MenuKind::Exit => EXIT_MENU.to_vec(),
-                MenuKind::Options | MenuKind::Attract | MenuKind::Sound | MenuKind::Layout => option_labels.iter().map(String::as_str).collect(),
+                MenuKind::Options | MenuKind::Attract | MenuKind::Sound | MenuKind::Layout | MenuKind::Dof => option_labels.iter().map(String::as_str).collect(),
             };
             let title = match menu.kind {
                 MenuKind::Exit => "Exit",
@@ -487,6 +488,7 @@ impl App {
                 MenuKind::Attract => "Attract Mode",
                 MenuKind::Sound => "Sound",
                 MenuKind::Layout => "Layout",
+                MenuKind::Dof => "DOF",
             };
             let view = wheel::MenuView { title, options: &names, selected: menu.selected, t: menu.opened.elapsed().as_secs_f32() };
             wheel::draw_menu(&mut g.canvas, lw, lh, &view, &g.fonts);
