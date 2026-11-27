@@ -366,7 +366,7 @@ mod tests {
         let mut last = None;
         let t = Instant::now();
         let ms = Duration::from_millis;
-        let gap = ms(DEFAULT_RATE_CAP_MS);
+        let gap = ms(200);
         assert!(throttle(&mut last, gap, t));
         assert!(!throttle(&mut last, gap, t + ms(35)));
         assert!(!throttle(&mut last, gap, t + gap - ms(1)));
