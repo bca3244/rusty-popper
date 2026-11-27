@@ -386,8 +386,14 @@ impl Joysticks {
         if bindings.exit_joy.is_empty() && bindings.exit_keys.is_empty() {
             return false;
         }
-        // Only one already under way (the first, if the menu never had the focus).
-        self.collect_scan();
+        // Only one already under way (the first, if the menu never had the
+        // focus), unless no stick is known at all: then the Exit button may
+        // be on one plugged in or woken since, so keep looking (slowly).
+        if self.ids.is_empty() {
+            self.rescan_if_due();
+        } else {
+            self.collect_scan();
+        }
         let down = self.exit_down_now(bindings);
         let pressed = down && !self.exit_down;
         self.exit_down = down;

@@ -63,12 +63,13 @@ impl Item {
         if self.media_name.is_empty() {
             return None;
         }
+        let cell = &self.media_files.cache[slot as usize];
         match &self.media_files.index {
-            Some(ix) => ix.find(slot.media_folder(), &self.media_name, config::MEDIA_EXTS),
-            None => {
-                let cell = &self.media_files.cache[slot as usize];
-                cell.get_or_init(|| config::find_media(&self.media_dir, slot, &self.media_name)).clone()
-            }
+            // A miss is checked on disk once (remembered): media added since
+            // the listing (say by VPin Studio, with no database change)
+            // still shows on the first visit.
+            Some(ix) => ix.find(slot.media_folder(), &self.media_name, config::MEDIA_EXTS).or_else(|| cell.get_or_init(|| config::find_media(&self.media_dir, slot, &self.media_name)).clone()),
+            None => cell.get_or_init(|| config::find_media(&self.media_dir, slot, &self.media_name)).clone(),
         }
     }
 

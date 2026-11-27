@@ -542,9 +542,12 @@ impl Tracker {
 
     /// Cheap check that some already-known game process is still alive.
     fn known_alive(&mut self) -> bool {
+        // Always drop what the handles say has exited: a signalled handle
+        // left in the watch would make every wait return at once (a busy
+        // loop) while some other process has no handle.
+        let gone = self.watch.exited();
+        self.known.retain(|pid| !gone.contains(&pid.as_u32()));
         if self.watch.complete {
-            let gone = self.watch.exited();
-            self.known.retain(|pid| !gone.contains(&pid.as_u32()));
             return !self.known.is_empty();
         }
         let Some(sys) = self.sys.as_mut() else { return false };
