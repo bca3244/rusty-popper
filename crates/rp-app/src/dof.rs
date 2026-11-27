@@ -35,9 +35,9 @@ const RANDOM_FIRST: u32 = 901;
 const RANDOM_COUNT: u32 = 90;
 
 /// The shortest time between two wheel/page pulses (of any event); ones
-/// sooner are dropped, so fast scrolling flashes the toys about three times a second
+/// sooner are dropped, so fast scrolling flashes the toys about five times a second
 /// instead of hammering them (and DOF) on every step.
-const PULSE_GAP: Duration = Duration::from_millis(350);
+const PULSE_GAP: Duration = Duration::from_millis(200);
 
 enum Cmd {
     /// Start a DOF session (if there isn't one).
@@ -355,9 +355,9 @@ mod tests {
         assert!(!throttle(&mut last, t + PULSE_GAP - ms(1)));
         assert!(throttle(&mut last, t + PULSE_GAP));
         assert!(!throttle(&mut last, t + PULSE_GAP + ms(100)));
-        // Held flipper at 35 ms steps for 2 s: 6 pulses, about three a second.
+        // Held flipper at 35 ms steps for 2 s: 10 pulses, about five a second.
         let mut last = None;
-        assert_eq!((0..58).filter(|i| throttle(&mut last, t + ms(35 * i))).count(), 6);
+        assert_eq!((0..58).filter(|i| throttle(&mut last, t + ms(35 * i))).count(), 10);
     }
 
     /// On a cabinet: `cargo test -p rusty-popper dof_objects -- --ignored --nocapture`
