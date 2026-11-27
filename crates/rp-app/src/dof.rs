@@ -39,7 +39,7 @@ const RANDOM_COUNT: u32 = 90;
 /// event), in ms; ones sooner are dropped, so fast scrolling doesn't hammer
 /// the toys (and DOF) on every step. 0 is Off: every step pulses.
 pub const RATE_CAP_CHOICES: &[u64] = &[0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
-pub const DEFAULT_RATE_CAP_MS: u64 = 200;
+pub const DEFAULT_RATE_CAP_MS: u64 = 100;
 
 enum Cmd {
     /// Start a DOF session (if there isn't one).
