@@ -92,8 +92,13 @@ const STILL_AFTER: Duration = Duration::from_millis(1200);
 /// of the housekeeping). A new video frame or a key wakes the loop at once.
 const STILL_POLL: Duration = Duration::from_millis(7);
 /// Time per frame for turning loaded logos into textures while the menu is
-/// still. While it moves, one logo per frame at most, so a frame never runs long.
+/// still (see `MOVING_UPLOAD_BUDGET` for while it moves).
 const LOGO_UPLOAD_BUDGET: Duration = Duration::from_millis(3);
+/// While anything moves: at most this long, and this many logos that are
+/// on the wheel now (a letter jump lands among games not loaded yet); one
+/// that isn't on the wheel ends the frame's uploads.
+const MOVING_UPLOAD_BUDGET: Duration = Duration::from_micros(1500);
+const MOVING_UPLOADS: usize = 4;
 /// A secondary screen with nothing new is still redrawn this often.
 const REDRAW_EVERY: Duration = Duration::from_secs(1);
 /// This many failed frames in a row (about ten seconds) and the menu restarts itself.

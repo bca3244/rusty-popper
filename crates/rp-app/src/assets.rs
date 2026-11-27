@@ -184,9 +184,12 @@ pub fn spawn_loader(paths: Vec<Option<PathBuf>>, cache: Option<PathBuf>) -> Load
                 // A bad image must not stop the rest from loading, even if the
                 // decoder panics on it.
                 match std::panic::catch_unwind(|| load_cached(i, path, cache.as_deref())) {
-                    Ok(Ok(logo)) => {
+                    Ok(Ok((logo, to_cache))) => {
                         if tx.send(logo).is_err() {
                             return;
+                        }
+                        if let Some(c) = to_cache {
+                            c.write();
                         }
                     }
                     Ok(Err(e)) => log::warn!("wheel {}: {e}", path.display()),
@@ -284,7 +287,11 @@ fn cache_key(path: &Path, len: u64, mtime: u128) -> u64 {
 
 /// The cache file for `path` as it is now, and its key.
 fn cache_file(dir: &Path, path: &Path) -> Option<(PathBuf, u64)> {
-    let meta = std::fs::metadata(path).ok()?;
+    cache_file_for(dir, path, &std::fs::metadata(path).ok()?)
+}
+
+/// `cache_file`, for a logo file whose metadata is `meta`.
+fn cache_file_for(dir: &Path, path: &Path, meta: &std::fs::Metadata) -> Option<(PathBuf, u64)> {
     let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
     let key = cache_key(path, meta.len(), mtime);
     Some((dir.join(format!("{key:016x}.logo")), key))
@@ -338,22 +345,43 @@ fn read_cached(index: usize, file: &Path, key: u64) -> Option<Logo> {
     if rgba.dimensions() != (c.w, c.h) {
         return None;
     }
+    // Marked as just used, so trimming the cache drops the least used.
+    let _ = std::fs::File::options().write(true).open(file).and_then(|f| f.set_modified(SystemTime::now()));
     Some(Logo { index, rgba, glow: tint(c.glow_alpha, c.hue), hue: c.hue })
 }
 
-fn write_cached(file: &Path, key: u64, logo: &Logo, glow_alpha: &[u8]) -> anyhow::Result<()> {
+/// A logo loaded from its file, to be written to the cache once it has
+/// been handed over.
+struct ToCache {
+    file: PathBuf,
+    key: u64,
+    rgba: RgbaImage,
+    hue: f32,
+    glow_alpha: Vec<u8>,
+}
+
+impl ToCache {
+    fn write(self) {
+        if let Err(e) = write_cached(&self.file, self.key, &self.rgba, self.hue, &self.glow_alpha) {
+            log::debug!("wheel cache {}: {e}", self.file.display());
+        }
+    }
+}
+
+fn write_cached(file: &Path, key: u64, rgba: &RgbaImage, hue: f32, glow_alpha: &[u8]) -> anyhow::Result<()> {
     use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
     use image::ImageEncoder;
     let mut png = Vec::new();
     // Fast compression: quick to write, and it reads back quickly too.
-    let (w, h) = logo.rgba.dimensions();
-    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, PngFilter::Adaptive).write_image(logo.rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)?;
-    let bytes = encode_cached(key, logo.hue, (w, h), glow_alpha, &png);
+    let (w, h) = rgba.dimensions();
+    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, PngFilter::Adaptive).write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)?;
+    let bytes = encode_cached(key, hue, (w, h), glow_alpha, &png);
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // Written aside and renamed, so a file is either whole or not there.
-    let tmp = file.with_extension(format!("{:?}.tmp", std::thread::current().id()).replace(|c: char| !c.is_ascii_alphanumeric() && c != '.', ""));
+    // Written aside and renamed, so a file is either whole or not there
+    // (named for the process and thread, as another copy may be writing it too).
+    let tmp = file.with_extension(format!("{}.{:?}.tmp", std::process::id(), std::thread::current().id()).replace(|c: char| !c.is_ascii_alphanumeric() && c != '.', ""));
     std::fs::write(&tmp, &bytes)?;
     if let Err(e) = std::fs::rename(&tmp, file) {
         let _ = std::fs::remove_file(&tmp);
@@ -362,19 +390,16 @@ fn write_cached(file: &Path, key: u64, logo: &Logo, glow_alpha: &[u8]) -> anyhow
     Ok(())
 }
 
-/// Loads a logo from the cache, or from its file (then caches it).
-fn load_cached(index: usize, path: &Path, cache: Option<&Path>) -> anyhow::Result<Logo> {
+/// Loads a logo from the cache, or from its file (then also what to write
+/// to the cache, once the logo is on its way).
+fn load_cached(index: usize, path: &Path, cache: Option<&Path>) -> anyhow::Result<(Logo, Option<ToCache>)> {
     let file = cache.and_then(|dir| cache_file(dir, path));
     if let Some(logo) = file.as_ref().and_then(|(f, key)| read_cached(index, f, *key)) {
-        return Ok(logo);
+        return Ok((logo, None));
     }
     let (logo, glow_alpha) = load(index, path)?;
-    if let Some((f, key)) = &file {
-        if let Err(e) = write_cached(f, *key, &logo, &glow_alpha) {
-            log::debug!("wheel cache {}: {e}", f.display());
-        }
-    }
-    Ok(logo)
+    let to_cache = file.map(|(file, key)| ToCache { file, key, rgba: logo.rgba.clone(), hue: logo.hue, glow_alpha });
+    Ok((logo, to_cache))
 }
 
 /// Once a run, on a helper thread: removes cache files for logos that are
@@ -389,8 +414,24 @@ fn clean_cache_once(dir: &Path, paths: &Arc<Vec<Option<PathBuf>>>) {
     let _ = std::thread::Builder::new().name("logo-cache-clean".into()).spawn(move || {
         lower_priority();
         let Ok(list) = std::fs::read_dir(&dir) else { return };
-        let wanted: std::collections::HashSet<std::ffi::OsString> =
-            paths.iter().flatten().filter_map(|p| cache_file(&dir, p)).filter_map(|(f, _)| f.file_name().map(|n| n.to_os_string())).collect();
+        // A logo file that can't be looked at (on a drive or share that is
+        // offline) might still be there: then its cache file can't be told
+        // from the unwanted ones, and none of them go. Only a file missing
+        // from a folder that is there is gone.
+        let mut wanted = std::collections::HashSet::new();
+        let mut unsure = false;
+        for p in paths.iter().flatten() {
+            match std::fs::metadata(p) {
+                Ok(meta) => match cache_file_for(&dir, p, &meta).and_then(|(f, _)| f.file_name().map(|n| n.to_os_string())) {
+                    Some(name) => {
+                        wanted.insert(name);
+                    }
+                    None => unsure = true,
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && p.parent().is_some_and(|d| d.is_dir()) => {}
+                Err(_) => unsure = true,
+            }
+        }
         let now = SystemTime::now();
         let mut kept = Vec::new();
         for e in list.flatten() {
@@ -400,7 +441,7 @@ fn clean_cache_once(dir: &Path, paths: &Arc<Vec<Option<PathBuf>>>) {
             let tmp = name.to_string_lossy().ends_with(".tmp");
             // A half-written file from a crash (not one being written now).
             let stale_tmp = tmp && now.duration_since(changed).is_ok_and(|d| d.as_secs() > 600);
-            if stale_tmp || (!tmp && !wanted.contains(&name)) {
+            if stale_tmp || (!tmp && !unsure && !wanted.contains(&name)) {
                 let _ = std::fs::remove_file(e.path());
             } else if !tmp {
                 kept.push((changed, meta.len(), e.path()));
@@ -536,6 +577,15 @@ mod tests {
         assert_ne!(k, cache_key(Path::new(r"C:\other.png"), 1000, 5));
     }
 
+    /// `load_cached`, then writing what it has for the cache.
+    fn load_and_cache(index: usize, path: &Path, cache: Option<&Path>) -> Logo {
+        let (logo, to_cache) = load_cached(index, path, cache).unwrap();
+        if let Some(c) = to_cache {
+            c.write();
+        }
+        logo
+    }
+
     #[test]
     fn a_cached_logo_is_the_same_as_a_fresh_one() {
         let dir = std::env::temp_dir().join(format!("rp-logo-cache-test-{}", std::process::id()));
@@ -545,21 +595,21 @@ mod tests {
         let img = RgbaImage::from_fn(900, 400, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, 40, if (x / 50 + y / 50) % 2 == 0 { 255 } else { 0 }]));
         img.save(&src).unwrap();
         let cache = dir.join("cache");
-        let fresh = load_cached(3, &src, Some(&cache)).unwrap();
+        let fresh = load_and_cache(3, &src, Some(&cache));
         let (file, _) = cache_file(&cache, &src).unwrap();
         assert!(file.is_file(), "nothing cached");
-        let again = load_cached(3, &src, Some(&cache)).unwrap();
+        let again = load_and_cache(3, &src, Some(&cache));
         assert_eq!(again.index, 3);
         assert_eq!(again.rgba, fresh.rgba);
         assert_eq!(again.glow, fresh.glow);
         assert_eq!(again.hue, fresh.hue);
         // A damaged cache file: loaded from the source (and cached again).
         std::fs::write(&file, b"junk").unwrap();
-        assert_eq!(load_cached(3, &src, Some(&cache)).unwrap().rgba, fresh.rgba);
+        assert_eq!(load_and_cache(3, &src, Some(&cache)).rgba, fresh.rgba);
         assert!(parse_cached(&std::fs::read(&file).unwrap(), cache_file(&cache, &src).unwrap().1).is_some());
         // No cache folder to be had: still loads.
         let blocked = dir.join("wheel.png").join("cache");
-        assert_eq!(load_cached(3, &src, Some(&blocked)).unwrap().rgba, fresh.rgba);
+        assert_eq!(load_and_cache(3, &src, Some(&blocked)).rgba, fresh.rgba);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

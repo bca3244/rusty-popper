@@ -326,14 +326,17 @@ impl App {
         g.perf.part("input");
 
         // Upload any logos the loader finished, within a small time budget
-        // per frame so loading never costs a dropped frame: one logo at most
-        // while anything moves, and the playfield is redrawn for one that
-        // shows up on a still wheel.
+        // per frame so loading never costs a dropped frame: while anything
+        // moves, a few logos that are on the wheel now (so a letter jump
+        // doesn't sit on placeholders) or one that isn't, and the playfield
+        // is redrawn for one that shows up on a still wheel.
         let moving = animating || !g.wheel.at_rest() || g.outs.iter().any(|o| o.slide.is_some());
+        let budget = if moving { MOVING_UPLOAD_BUDGET } else { LOGO_UPLOAD_BUDGET };
         let upload_start = Instant::now();
         let mut current = false;
         let mut uploaded = 0;
-        while upload_start.elapsed() < LOGO_UPLOAD_BUDGET && !(moving && uploaded > 0) {
+        let mut off_wheel = false;
+        while upload_start.elapsed() < budget && !(moving && (off_wheel || uploaded >= MOVING_UPLOADS)) {
             let Some(logo) = g.logos.try_recv() else { break };
             // One the wheel has scrolled far from since it was asked for isn't wanted now.
             if !g.logo_keep.get(logo.index).copied().unwrap_or(true) {
@@ -344,7 +347,9 @@ impl App {
                 g.context.make_current(&g.outs[0].surface)?;
                 current = true;
             }
-            if !moving && on_wheel(&self.view, g.wheel.selected(), logo.index) {
+            let shown = on_wheel(&self.view, g.wheel.selected(), logo.index);
+            off_wheel |= !shown;
+            if !moving && shown {
                 g.outs[0].dirty.set(true);
             }
             let upload = |c: &mut Canvas<OpenGl>, img: &image::RgbaImage| {

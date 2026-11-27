@@ -19,6 +19,13 @@ const KEEP_FRAMES: u64 = 120;
 /// Pictures are at most this big a side; bigger text is drawn as it is.
 const MAX_SIDE: i32 = 4096;
 
+/// Rounds a coordinate or size to 1/64 unit, so the same text worked out a
+/// little differently frame to frame (a sliding menu's `(y + h / 2) - y`)
+/// keeps its picture instead of being drawn again for an ulp.
+fn quantise(v: f32) -> f32 {
+    (v * 64.0).round() / 64.0
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Op {
     Text { x: f32, y: f32, text: String, font: FontId, size: f32, color: Color, align: Align, baseline: Baseline },
@@ -43,15 +50,16 @@ impl Group {
     /// One line of text, as `fill_text` would draw it at `x`, `y`.
     #[allow(clippy::too_many_arguments)]
     pub fn text(&mut self, x: f32, y: f32, text: impl Into<String>, font: FontId, size: f32, color: Color, align: Align, baseline: Baseline) -> &mut Self {
-        let (x, y) = (x - self.anchor.0, y - self.anchor.1);
-        self.ops.push(Op::Text { x, y, text: text.into(), font, size, color, align, baseline });
+        let (x, y) = (quantise(x - self.anchor.0), quantise(y - self.anchor.1));
+        self.ops.push(Op::Text { x, y, text: text.into(), font, size: quantise(size), color, align, baseline });
         self
     }
 
     /// A filled and outlined rounded rectangle (a tag chip).
     #[allow(clippy::too_many_arguments)]
     pub fn pill(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, fill: Color, stroke: Color, line: f32) -> &mut Self {
-        let (x, y) = (x - self.anchor.0, y - self.anchor.1);
+        let (x, y) = (quantise(x - self.anchor.0), quantise(y - self.anchor.1));
+        let [w, h, r, line] = [w, h, r, line].map(quantise);
         self.ops.push(Op::Pill { x, y, w, h, r, fill, stroke, line });
         self
     }
@@ -110,6 +118,8 @@ struct Cached {
 pub struct TextCache {
     cached: Vec<Cached>,
     frame: u64,
+    /// The size each place was last asked about (see `steady`), and when.
+    sizes: std::collections::HashMap<Slot, (f32, u64)>,
 }
 
 /// Pixel layout of a picture for content spanning `bounds` (x0, y0, x1, y1,
@@ -285,9 +295,18 @@ impl TextCache {
     }
 
     /// Call once a frame: frees pictures not drawn for a while.
+    /// Whether `size` (a box's size in pixels, say) for `slot` is the same
+    /// as it was the frame before: something at rest rather than growing or
+    /// shrinking. Remembers `size` for next frame.
+    pub fn steady(&mut self, slot: Slot, size: f32) -> bool {
+        let frame = self.frame;
+        matches!(self.sizes.insert(slot, (size, frame)), Some((s, f)) if s == size && f + 1 >= frame)
+    }
+
     pub fn end_frame(&mut self, cv: &mut Cv) {
         self.frame += 1;
         let frame = self.frame;
+        self.sizes.retain(|_, (_, f)| *f + 1 >= frame);
         self.cached.retain(|c| {
             let keep = frame - c.used <= KEEP_FRAMES;
             if !keep {
@@ -350,5 +369,19 @@ mod tests {
         assert_eq!(mk(0.0, 80.0).ops, mk(300.0, 80.0).ops);
         assert_eq!(mk(0.0, 80.0).key(), mk(300.0, 80.0).key());
         assert_ne!(mk(0.0, 80.0).key(), mk(0.0, 81.0).key());
+    }
+
+    #[test]
+    fn an_ulp_off_keeps_the_same_key() {
+        // A sliding menu row: `(y + h / 2) - y` comes out a little different as y moves.
+        let row = |y: f32| {
+            let mut g = Group::new(0.0, y);
+            g.pill(0.0, y + 96.0 / 2.0, 80.0, 42.0, 21.0, Color::white(), Color::black(), 1.5);
+            g
+        };
+        let keys: Vec<u64> = (0..200).map(|i| row(431.7 + i as f32 * 3.3).key()).collect();
+        assert!(keys.iter().all(|k| *k == keys[0]));
+        assert_eq!(quantise(48.000004), 48.0);
+        assert_eq!(quantise(1.0 / 64.0), 1.0 / 64.0);
     }
 }

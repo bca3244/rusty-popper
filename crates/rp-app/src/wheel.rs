@@ -261,6 +261,9 @@ fn draw_logo(cv: &mut Cv, e: &Entry, w: f32, h: f32, alpha: f32, glow: f32, font
     }
 }
 
+/// Width over height of a game's box while it has no logo (a placeholder).
+const PLACEHOLDER_ASPECT: f32 = 1.6;
+
 /// Stand-in while the logo loads, or when a game has no wheel image.
 fn placeholder(cv: &mut Cv, e: &Entry, w: f32, h: f32, alpha: f32, fonts: &Fonts) {
     let (pw, ph) = (w, h * 0.6);
@@ -269,21 +272,26 @@ fn placeholder(cv: &mut Cv, e: &Entry, w: f32, h: f32, alpha: f32, fonts: &Fonts
     cv.fill_path(&p, &Paint::color(Color::rgbaf(0.07, 0.09, 0.13, 0.85 * alpha)));
     cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.2 * alpha)).with_line_width(2.0));
     // The text is sized by the box, and the box changes size as the wheel
-    // turns: its picture is made at the next of a few fixed sizes up and
-    // drawn a little smaller, so a turning wheel doesn't make a new one
-    // every frame.
-    let px = w * cv.transform().average_scale();
+    // turns: while it does, its picture is made at the next of a few fixed
+    // sizes up and drawn a little smaller, so a turning wheel doesn't make
+    // a new one every frame. Once the box keeps its size, the picture is
+    // made at the box's own size and put down pixel for pixel. The sizes
+    // are worked out from the scale and the placeholder's fixed aspect, not
+    // through `w`, so the same step gives the same text exactly.
+    let k = cv.transform().average_scale();
+    let px = w * k;
     if px.is_nan() || px < 4.0 {
         return;
     }
-    let ref_w = placeholder_ref_px(px) / px * w;
-    let zoom = w / ref_w;
-    let (pw, ph) = (ref_w, ref_w / w * h * 0.6);
+    // One place per game (its entry's address: a rebuilt list just makes new pictures).
+    let slot = ("placeholder", e as *const Entry as usize);
+    let mut cache = fonts.text.borrow_mut();
+    let (ref_w, zoom) = if cache.steady(slot, px) { (w, 1.0) } else { (placeholder_ref_px(px) / k, w * k / placeholder_ref_px(px)) };
+    let (pw, ph) = (ref_w, ref_w / PLACEHOLDER_ASPECT * 0.6);
     let size = (pw / (e.title.chars().count().max(6) as f32) * 1.7).min(ph * 0.42);
     let mut g = Group::new(0.0, 0.0);
     g.text(0.0, 0.0, &e.title, fonts.display, size, Color::rgbaf(0.92, 0.94, 0.98, 1.0), Align::Center, Baseline::Middle);
-    // One place per game (its entry's address: a rebuilt list just makes new pictures).
-    fonts.text.borrow_mut().draw(cv, ("placeholder", e as *const Entry as usize), &g, 0.0, 0.0, alpha, zoom);
+    cache.draw(cv, slot, &g, 0.0, 0.0, alpha, zoom);
 }
 
 /// The width in pixels a placeholder's text picture is made at for a box
@@ -496,7 +504,7 @@ fn draw_track(cv: &mut Cv, t: &Track, f: &Frame) {
     if t.covers && t.pos == WheelPosition::Bottom && !t.arc {
         fill_rect(cv, 0.0, t.cy + t.bh * 0.55, t.vw, 2.0, Color::rgbaf(1.0, 1.0, 1.0, 0.06));
     }
-    let sel_aspect = sel.logo.as_ref().map_or(1.6, |l| l.aspect);
+    let sel_aspect = sel.logo.as_ref().map_or(PLACEHOLDER_ASPECT, |l| l.aspect);
     let (sel_w, sel_h) = t.logo_size(sel_aspect, 0.0, t.cx);
     if !t.plain {
         slot_glow(cv, t.cx, t.cy, sel_w.max(t.bh) * 0.85, t.bh * 0.75, hue, 0.6 + 0.4 * near);
@@ -519,7 +527,7 @@ fn draw_track(cv: &mut Cv, t: &Track, f: &Frame) {
             continue;
         }
         let (x, y, rot) = t.place(d);
-        let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
+        let aspect = e.logo.as_ref().map_or(PLACEHOLDER_ASPECT, |l| l.aspect);
         let (w, h) = t.logo_size(aspect, a, x);
         cv.save();
         cv.translate(x, y);
@@ -838,7 +846,7 @@ pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, verb: &str, emulator:
     let cy = dh * 0.42;
     slot_glow(cv, vw / 2.0, cy, 520.0, 300.0, hue, a);
     let sc = 0.92 + 0.08 * ease_out(t / 0.5);
-    let aspect = e.logo.as_ref().map_or(1.6, |l| l.aspect);
+    let aspect = e.logo.as_ref().map_or(PLACEHOLDER_ASPECT, |l| l.aspect);
     let (lw, lh) = fit(aspect, 760.0 * sc, 520.0 * sc);
     cv.save();
     cv.translate(vw / 2.0, cy);
