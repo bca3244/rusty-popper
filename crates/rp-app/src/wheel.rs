@@ -4,7 +4,9 @@
 
 use crate::assets::{GLOW_INNER, GLOW_SIZE};
 use crate::settings::{Layout, WheelPosition, WheelStyle};
+use crate::textcache::{Group, TextCache};
 use femtovg::{renderer::OpenGl, Align, Baseline, Canvas, Color, FontId, ImageId, Paint, Path};
+use std::cell::RefCell;
 use std::f32::consts::PI;
 
 pub const DESIGN_H: f32 = 1080.0;
@@ -23,6 +25,9 @@ pub struct Fonts {
     pub display: FontId,
     pub body: FontId,
     pub mono: FontId,
+    /// Pictures of the text drawn with these fonts (see `textcache`). Kept
+    /// here because everything that draws text is handed the fonts.
+    pub text: RefCell<TextCache>,
 }
 
 pub struct LogoTex {
@@ -173,12 +178,9 @@ pub fn draw(cv: &mut Cv, w: f32, h: f32, f: &Frame) {
         draw_track(cv, &track, f);
         draw_info(cv, vw, f, &track);
     } else {
-        let paint = Paint::color(Color::rgbaf(0.9, 0.92, 0.96, 0.8))
-            .with_font(&[f.fonts.display])
-            .with_font_size(56.0)
-            .with_text_align(Align::Center)
-            .with_text_baseline(Baseline::Middle);
-        let _ = cv.fill_text(vw / 2.0, dh / 2.0, format!("{} is empty", f.playlist), &paint);
+        let mut g = Group::new(vw / 2.0, dh / 2.0);
+        g.text(vw / 2.0, dh / 2.0, format!("{} is empty", f.playlist), f.fonts.display, 56.0, Color::rgbaf(0.9, 0.92, 0.96, 0.8), Align::Center, Baseline::Middle);
+        f.fonts.text.borrow_mut().draw(cv, ("empty", 0), &g, 0.0, 0.0, 1.0, 1.0);
     }
     if let Some((letter, t)) = f.letter {
         draw_letter(cv, vw, dh, letter, t, f.fonts);
@@ -266,13 +268,29 @@ fn placeholder(cv: &mut Cv, e: &Entry, w: f32, h: f32, alpha: f32, fonts: &Fonts
     p.rounded_rect(-pw / 2.0, -ph / 2.0, pw, ph, ph * 0.18);
     cv.fill_path(&p, &Paint::color(Color::rgbaf(0.07, 0.09, 0.13, 0.85 * alpha)));
     cv.stroke_path(&p, &Paint::color(Color::rgbaf(1.0, 1.0, 1.0, 0.2 * alpha)).with_line_width(2.0));
+    // The text is sized by the box, and the box changes size as the wheel
+    // turns: its picture is made at the next of a few fixed sizes up and
+    // drawn a little smaller, so a turning wheel doesn't make a new one
+    // every frame.
+    let px = w * cv.transform().average_scale();
+    if px.is_nan() || px < 4.0 {
+        return;
+    }
+    let ref_w = placeholder_ref_px(px) / px * w;
+    let zoom = w / ref_w;
+    let (pw, ph) = (ref_w, ref_w / w * h * 0.6);
     let size = (pw / (e.title.chars().count().max(6) as f32) * 1.7).min(ph * 0.42);
-    let paint = Paint::color(Color::rgbaf(0.92, 0.94, 0.98, alpha))
-        .with_font(&[fonts.display])
-        .with_font_size(size)
-        .with_text_align(Align::Center)
-        .with_text_baseline(Baseline::Middle);
-    let _ = cv.fill_text(0.0, 0.0, &e.title, &paint);
+    let mut g = Group::new(0.0, 0.0);
+    g.text(0.0, 0.0, &e.title, fonts.display, size, Color::rgbaf(0.92, 0.94, 0.98, 1.0), Align::Center, Baseline::Middle);
+    // One place per game (its entry's address: a rebuilt list just makes new pictures).
+    fonts.text.borrow_mut().draw(cv, ("placeholder", e as *const Entry as usize), &g, 0.0, 0.0, alpha, zoom);
+}
+
+/// The width in pixels a placeholder's text picture is made at for a box
+/// `px` pixels wide: the next of a ladder of sizes about 9% apart.
+fn placeholder_ref_px(px: f32) -> f32 {
+    let step = (px.log2() * 8.0 - 1e-4).ceil();
+    2f32.powf(step / 8.0).max(px)
 }
 
 fn visible_items(pos: f32, n: usize, range: f32) -> Vec<(usize, f32)> {
@@ -657,9 +675,16 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame, track: &Track) {
     let text = |font: FontId, size: f32, c: Color, align: Align| {
         Paint::color(c).with_font(&[font]).with_font_size(size).with_text_align(align).with_text_baseline(Baseline::Alphabetic)
     };
+    // The text is drawn from pictures (see `textcache`), made at full
+    // opacity where it rests; each part then fades and slides in as before.
+    let mut cache = f.fonts.text.borrow_mut();
+    let al = Align::Left;
+    let ab = Baseline::Alphabetic;
     // The small maker/year line only when the title doesn't already end with it.
     if !e.subtitle.is_empty() && split_suffix(&e.title).1.is_none() {
-        let _ = cv.fill_text(x + off, y, &e.subtitle, &text(f.fonts.mono, 26.0, hue_color(hue, 0.9, 0.72, a), Align::Left));
+        let mut g = Group::new(x, y);
+        g.text(x, y, &e.subtitle, f.fonts.mono, 26.0, hue_color(hue, 0.9, 0.72, 1.0), al, ab);
+        cache.draw(cv, ("info subtitle", 0), &g, off, 0.0, a, 1.0);
     }
     // Title: the game name, then its "(Maker Year)" on a smaller second line.
     // A long name shrinks to fit, then wraps onto two lines itself.
@@ -678,11 +703,11 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame, track: &Track) {
     };
     let line_h = size * 1.05;
     let mut ty = y + size; // first baseline sits one title line below the subtitle
-    let tx = x + off * 1.6;
+    let tx = x;
+    let mut title = Group::new(x, y);
     for line in &name_lines {
-        let shadow = text(f.fonts.display, size, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
-        let _ = cv.fill_text(tx + 3.0, ty + 3.0, line, &shadow);
-        let _ = cv.fill_text(tx, ty, line, &text(f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, a), Align::Left));
+        title.text(tx + 3.0, ty + 3.0, line, f.fonts.display, size, Color::rgbaf(0.0, 0.0, 0.0, 0.45), al, ab);
+        title.text(tx, ty, line, f.fonts.display, size, Color::rgbaf(0.957, 0.965, 0.984, 1.0), al, ab);
         ty += line_h;
     }
     let mut last_baseline = ty - line_h;
@@ -691,17 +716,18 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame, track: &Track) {
         let sw = width_at_92(cv, suffix) * small / 92.0;
         let small = if sw > max_w { small * max_w / sw } else { small };
         last_baseline += small * 1.2;
-        let shadow = text(f.fonts.display, small, Color::rgbaf(0.0, 0.0, 0.0, 0.45 * a), Align::Left);
-        let _ = cv.fill_text(tx + 2.0, last_baseline + 2.0, suffix, &shadow);
-        let _ = cv.fill_text(tx, last_baseline, suffix, &text(f.fonts.display, small, Color::rgbaf(0.86, 0.88, 0.93, 0.85 * a), Align::Left));
+        title.text(tx + 2.0, last_baseline + 2.0, suffix, f.fonts.display, small, Color::rgbaf(0.0, 0.0, 0.0, 0.45), al, ab);
+        title.text(tx, last_baseline, suffix, f.fonts.display, small, Color::rgbaf(0.86, 0.88, 0.93, 0.85), al, ab);
     }
+    cache.draw(cv, ("info title", 0), &title, off * 1.6, 0.0, a, 1.0);
 
     // Tag chips below the title, wrapping onto more rows as needed.
     let mut chip_top = last_baseline + 28.0;
-    let left = x + off * 2.0;
+    let left = x;
     let mut chip_x = left;
+    let mut chips = Group::new(x, y);
     for chip in &e.chips {
-        let paint = text(f.fonts.body, 24.0, Color::rgbaf(1.0, 1.0, 1.0, a), Align::Left);
+        let paint = text(f.fonts.body, 24.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), Align::Left);
         let tw = cv.measure_text(0.0, 0.0, chip, &paint).map(|m| m.width()).unwrap_or(100.0);
         let w = tw + 32.0;
         if chip_x > left && chip_x + w > x + max_w {
@@ -711,15 +737,12 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame, track: &Track) {
         // A solid colour per tag (the same tag always gets the same colour)
         // so the text stays readable over busy playfield video.
         let hue = tag_hue(chip);
-        let mut p = Path::new();
-        p.rounded_rect(chip_x, chip_top, w, 42.0, 21.0);
-        cv.fill_path(&p, &Paint::color(hue_color(hue, 0.65, 0.34, 0.92 * a)));
-        cv.stroke_path(&p, &Paint::color(hue_color(hue, 0.8, 0.62, 0.9 * a)).with_line_width(1.5));
-        let shadow = text(f.fonts.body, 24.0, Color::rgbaf(0.0, 0.0, 0.0, 0.5 * a), Align::Left);
-        let _ = cv.fill_text(chip_x + 17.0, chip_top + 30.5, chip, &shadow);
-        let _ = cv.fill_text(chip_x + 16.0, chip_top + 29.0, chip, &paint);
+        chips.pill(chip_x, chip_top, w, 42.0, 21.0, hue_color(hue, 0.65, 0.34, 0.92), hue_color(hue, 0.8, 0.62, 0.9), 1.5);
+        chips.text(chip_x + 17.0, chip_top + 30.5, chip, f.fonts.body, 24.0, Color::rgbaf(0.0, 0.0, 0.0, 0.5), al, ab);
+        chips.text(chip_x + 16.0, chip_top + 29.0, chip, f.fonts.body, 24.0, Color::rgbaf(1.0, 1.0, 1.0, 1.0), al, ab);
         chip_x += w + 12.0;
     }
+    cache.draw(cv, ("info chips", 0), &chips, off * 2.0, 0.0, a, 1.0);
     // The phone remote's QR code in the corner, the text to its left.
     let mut right = vw - 96.0;
     if let Some((img, modules)) = f.qr {
@@ -733,12 +756,15 @@ fn draw_info(cv: &mut Cv, vw: f32, f: &Frame, track: &Track) {
         cv.fill_path(&p, &Paint::image(img, qx, qy, size, size, 0.0, 0.95));
         right = qx - 24.0;
     }
+    let ar = Align::Right;
+    let mut corner = Group::new(right, y);
     if let Some(note) = &f.update_note {
-        let _ = cv.fill_text(right, y - 76.0, note, &text(f.fonts.mono, 22.0, Color::rgbaf(1.0, 0.75, 0.33, 0.95), Align::Right));
+        corner.text(right, y - 76.0, note, f.fonts.mono, 22.0, Color::rgbaf(1.0, 0.75, 0.33, 0.95), ar, ab);
     }
-    let _ = cv.fill_text(right, y - 40.0, f.playlist.to_uppercase(), &text(f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), Align::Right));
+    corner.text(right, y - 40.0, f.playlist.to_uppercase(), f.fonts.mono, 24.0, hue_color(195.0, 0.9, 0.72, 0.9), ar, ab);
     let counter = format!("{:02} / {}", idx + 1, f.order.len());
-    let _ = cv.fill_text(right, y, &counter, &text(f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), Align::Right));
+    corner.text(right, y, &counter, f.fonts.mono, 28.0, Color::rgbaf(0.9, 0.92, 0.96, 0.7), ar, ab);
+    cache.draw(cv, ("info corner", 0), &corner, 0.0, 0.0, 1.0, 1.0);
 }
 
 /// The exit menu as drawn: options, which is selected, and seconds since it opened.
@@ -775,12 +801,11 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
     cv.fill_path(&p, &Paint::color(Color::rgbaf(0.07, 0.086, 0.13, 0.96 * a)));
     cv.stroke_path(&p, &Paint::color(Color::rgbaf(0.13, 0.16, 0.23, a)).with_line_width(2.0));
 
-    let title = Paint::color(Color::rgbaf(0.9, 0.92, 0.96, a))
-        .with_font(&[fonts.display])
-        .with_font_size(64.0)
-        .with_text_align(Align::Center)
-        .with_text_baseline(Baseline::Alphabetic);
-    let _ = cv.fill_text(vw / 2.0, py + 104.0, m.title, &title);
+    // The text comes from pictures (see `textcache`) that slide and fade with the panel.
+    let mut cache = fonts.text.borrow_mut();
+    let mut title = Group::new(vw / 2.0, py);
+    title.text(vw / 2.0, py + 104.0, m.title, fonts.display, 64.0, Color::rgbaf(0.9, 0.92, 0.96, 1.0), Align::Center, Baseline::Alphabetic);
+    cache.draw(cv, ("menu title", 0), &title, 0.0, 0.0, a, 1.0);
 
     let accent = Color::rgbaf(0.325, 0.827, 1.0, a);
     for (i, opt) in m.options.iter().enumerate() {
@@ -791,13 +816,10 @@ pub fn draw_menu(cv: &mut Cv, w: f32, h: f32, m: &MenuView, fonts: &Fonts) {
             p.rounded_rect(px + 32.0, y + 8.0, pw - 64.0, row_h - 16.0, (row_h - 16.0) / 2.0);
             cv.fill_path(&p, &Paint::color(accent));
         }
-        let c = if sel { Color::rgbaf(0.04, 0.047, 0.07, a) } else { Color::rgbaf(0.88, 0.9, 0.95, 0.85 * a) };
-        let paint = Paint::color(c)
-            .with_font(&[fonts.body])
-            .with_font_size(42.0 * row_h / 96.0)
-            .with_text_align(Align::Center)
-            .with_text_baseline(Baseline::Middle);
-        let _ = cv.fill_text(vw / 2.0, y + row_h / 2.0, opt, &paint);
+        let c = if sel { Color::rgbaf(0.04, 0.047, 0.07, 1.0) } else { Color::rgbaf(0.88, 0.9, 0.95, 0.85) };
+        let mut row = Group::new(vw / 2.0, y);
+        row.text(vw / 2.0, y + row_h / 2.0, *opt, fonts.body, 42.0 * row_h / 96.0, c, Align::Center, Baseline::Middle);
+        cache.draw(cv, ("menu row", i), &row, 0.0, 0.0, a, 1.0);
     }
     cv.restore();
 }
@@ -832,11 +854,12 @@ pub fn draw_launch(cv: &mut Cv, w: f32, h: f32, e: &Entry, verb: &str, emulator:
     cv.stroke_path(&p, &paint);
 
     let title_size = 46.0f32.min((vw - 120.0) / (e.title.chars().count().max(1) as f32 + 10.0) * 1.9);
-    let text = |font: FontId, size: f32, c: Color| {
-        Paint::color(c).with_font(&[font]).with_font_size(size).with_text_align(Align::Center).with_text_baseline(Baseline::Alphabetic)
-    };
-    let _ = cv.fill_text(vw / 2.0, spin_y + 110.0, format!("{verb} {}", e.title), &text(fonts.display, title_size, Color::rgbaf(0.93, 0.945, 0.97, a)));
-    let _ = cv.fill_text(vw / 2.0, spin_y + 156.0, emulator.to_uppercase(), &text(fonts.mono, 24.0, Color::rgbaf(0.9, 0.92, 0.96, 0.6 * a)));
+    // From a picture (see `textcache`) that fades in.
+    let (ac, ab) = (Align::Center, Baseline::Alphabetic);
+    let mut g = Group::new(vw / 2.0, spin_y);
+    g.text(vw / 2.0, spin_y + 110.0, format!("{verb} {}", e.title), fonts.display, title_size, Color::rgbaf(0.93, 0.945, 0.97, 1.0), ac, ab);
+    g.text(vw / 2.0, spin_y + 156.0, emulator.to_uppercase(), fonts.mono, 24.0, Color::rgbaf(0.9, 0.92, 0.96, 0.6), ac, ab);
+    fonts.text.borrow_mut().draw(cv, ("launch", 0), &g, 0.0, 0.0, a, 1.0);
     cv.restore();
 }
 
@@ -912,6 +935,19 @@ mod tests {
             let (x, _, _) = t.place(2.0);
             assert!(x <= 1080.0 - 40.0, "Arc at {size}%: second wheel at {x}");
         }
+    }
+
+    #[test]
+    fn placeholder_pictures_come_in_a_few_sizes() {
+        for px in [4.0f32, 100.0, 333.3, 512.0, 799.9, 1520.0] {
+            let r = placeholder_ref_px(px);
+            // Never drawn bigger than made, and at most a step smaller.
+            assert!(r >= px && r < px * 1.0906, "{px} -> {r}");
+            // A box growing a little (a turning wheel) mostly keeps its picture.
+            assert!(placeholder_ref_px(px * 1.0001) <= r * 1.0906);
+        }
+        assert_eq!(placeholder_ref_px(512.0), 512.0);
+        assert_eq!(placeholder_ref_px(470.0), placeholder_ref_px(480.0));
     }
 
     #[test]

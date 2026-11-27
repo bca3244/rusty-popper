@@ -113,7 +113,7 @@ impl App {
             }
         }
         if !same_items {
-            g.load_logos(&self.lib.items, item);
+            g.load_logos(&self.lib.items);
         }
     }
 
@@ -197,7 +197,7 @@ impl App {
                     o.dirty.set(true);
                     let _ = o.player.set_pause(false);
                 }
-                g.load_logos(&self.lib.items, g.shown);
+                g.load_logos(&self.lib.items);
             }
             self.last_input = now;
             self.attract_on = false;

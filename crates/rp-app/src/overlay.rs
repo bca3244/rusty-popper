@@ -2,6 +2,7 @@
 //! the screen Popper's PinUpPlayer.ini assigns them (the playfield if that
 //! screen isn't one Rusty Popper drives).
 
+use crate::textcache::Group;
 use crate::wheel::Fonts;
 use femtovg::{renderer::OpenGl, Align, Baseline, Canvas, Color, ImageId, Paint, Path};
 use std::time::Instant;
@@ -52,12 +53,10 @@ pub fn draw(cv: &mut Canvas<OpenGl>, w: f32, h: f32, card: &Card, fonts: &Fonts)
         None => {
             let what = if card.kind == CardKind::Info { "info" } else { "help" };
             let size = (w.min(h) * 0.05).max(24.0);
-            let paint = Paint::color(Color::rgbaf(0.92, 0.94, 0.98, a))
-                .with_font(&[fonts.display])
-                .with_font_size(size)
-                .with_text_align(Align::Center)
-                .with_text_baseline(Baseline::Middle);
-            let _ = cv.fill_text(w / 2.0, h / 2.0, format!("No {what} card for this game"), &paint);
+            // From a picture (see `textcache`) that fades in.
+            let mut g = Group::new(w / 2.0, h / 2.0);
+            g.text(w / 2.0, h / 2.0, format!("No {what} card for this game"), fonts.display, size, Color::rgbaf(0.92, 0.94, 0.98, 1.0), Align::Center, Baseline::Middle);
+            fonts.text.borrow_mut().draw(cv, ("no card", 0), &g, 0.0, 0.0, a, 1.0);
         }
     }
 }
@@ -80,10 +79,8 @@ pub fn draw_notice(cv: &mut Canvas<OpenGl>, w: f32, h: f32, text: &str, t: f32, 
     let mut p = Path::new();
     p.rect(0.0, (h - band) / 2.0, w, band);
     cv.fill_path(&p, &Paint::color(Color::rgbaf(0.0, 0.0, 0.0, 0.8 * a)));
-    let paint = Paint::color(Color::rgbaf(1.0, 0.72, 0.62, a))
-        .with_font(&[fonts.display])
-        .with_font_size(size)
-        .with_text_align(Align::Center)
-        .with_text_baseline(Baseline::Middle);
-    let _ = cv.fill_text(w / 2.0, h / 2.0, text, &paint);
+    // From a picture (see `textcache`) that fades in and out.
+    let mut g = Group::new(w / 2.0, h / 2.0);
+    g.text(w / 2.0, h / 2.0, text, fonts.display, size, Color::rgbaf(1.0, 0.72, 0.62, 1.0), Align::Center, Baseline::Middle);
+    fonts.text.borrow_mut().draw(cv, ("notice", 0), &g, 0.0, 0.0, a, 1.0);
 }
