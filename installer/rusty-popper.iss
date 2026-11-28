@@ -251,8 +251,8 @@ begin
   if CurPageID = PopperPage.ID then begin
     Dir := RemoveBackslashUnlessRoot(Trim(PopperPage.Values[0]));
     if not HasDb(Dir) then
-      if SuppressibleMsgBox('There''s no PUPDatabase.db in "' + Dir + '", so this doesn''t look like PinUP Popper''s PinUPSystem folder.' +
-           #13#10#13#10 + 'Continue anyway?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDYES) <> IDYES then begin
+      if SuppressibleMsgBox('There''s no PUPDatabase.db in "' + Dir + '", so this doesn''t look like PinUP Popper''s PinUPSystem folder.' + #13#10#13#10 +
+           'Continue anyway?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDYES) <> IDYES then begin
         Result := False;
         Exit;
       end;
