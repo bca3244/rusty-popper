@@ -27,6 +27,21 @@ https://github.com/user-attachments/assets/669fd271-41e6-48a0-bba9-ca5fbae91a3a
 
 ## Installation
 
+### With the installer (easiest)
+
+1. **Download** [`RustyPopper-Setup.exe`](https://github.com/bca3244/rusty-popper/releases/latest/download/RustyPopper-Setup.exe) from the latest release and run it. It isn't code-signed, so Windows SmartScreen may say it "protected your PC": choose **More info → Run anyway**.
+2. **Check the PinUP Popper folder.** Setup finds Popper the same way Rusty Popper does (the default `C:\vPinball\PinUPSystem`, then where Windows has PinUpPlayer registered, then the usual folders on every drive) and shows what it found. Change it if it's wrong.
+3. **Check the install folder.** It defaults to a `RustyPopper` folder beside `PinUPSystem`, for example `C:\vPinball\RustyPopper`.
+4. **Pick the extras:** a desktop shortcut (on by default) and *Start Rusty Popper at boot instead of PinUP Popper* (off by default; it runs `Enable-RustyPopperStartup.ps1` for you, which asks for administrator rights).
+
+Setup also adds a Start menu entry and an uninstaller under *Settings → Apps*. It installs for your Windows account only and doesn't need administrator rights itself.
+
+**Upgrading:** run a newer `RustyPopper-Setup.exe` over the old install. It closes Rusty Popper if it's running, replaces the program files and keeps your `rusty-popper.toml`. It also works over a copy you unzipped by hand, as long as you point it at the same folder. The in-app updater ([Updating](#updating)) keeps working as well, whichever way you installed.
+
+**Uninstalling** removes the program files, shortcuts, logo cache and logs, but leaves `rusty-popper.toml` in the folder. If Rusty Popper was set to start at boot, the uninstaller first hands boot back to Popper (with `Disable-RustyPopperStartup.ps1`).
+
+### From the zip
+
 1. **Download** the latest `rusty-popper-vX-windows-x64.zip` from the [Releases page](https://github.com/bca3244/rusty-popper/releases/latest).
 2. **Unzip** the `rusty-popper` folder somewhere permanent, for example `C:\vPinball\RustyPopper`. It contains:
    - `rusty-popper.exe`, the front end
@@ -98,7 +113,7 @@ To install it, go to **Exit → Options → Install Update vX**. Rusty Popper th
 
 If the new version stops with an error during startup, or crashes three starts in a row, the old files are put back and the old version starts again (a start you end yourself, with Exit or a shutdown, doesn't count). Once the new version has run for a minute it counts as good, and the download is cleaned up. `rollback\` keeps the previous version until the next update, so you can also go back by hand by copying its files over. Updates never install during a game.
 
-To turn the startup check off, set `check = false` under `[update]` in `rusty-popper.toml`. To update by hand instead, download the new zip and copy `rusty-popper.exe` (and `libmpv-2.dll`, if it changed) over the old ones, keeping your own `rusty-popper.toml`.
+To turn the startup check off, set `check = false` under `[update]` in `rusty-popper.toml`. To update by hand instead, run the newer `RustyPopper-Setup.exe`, or download the new zip and copy `rusty-popper.exe` (and `libmpv-2.dll`, if it changed) over the old ones, keeping your own `rusty-popper.toml`.
 
 ## Settings
 

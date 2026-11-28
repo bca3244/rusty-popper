@@ -1,0 +1,147 @@
+name: Installer
+
+# Builds RustyPopper-Setup.exe from a release's windows-x64 zip, checks that it
+# installs, upgrades and uninstalls cleanly, and (for a release) attaches it to
+# that release. On a pull request it builds from the latest release's zip, so
+# changes to the installer script are tested before they merge.
+
+on:
+  pull_request:
+    paths:
+      - 'installer/**'
+      - '.github/workflows/installer.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build the installer for (e.g. v0.2.59)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVENT: ${{ github.event_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      INPUT_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the release zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = switch ($env:EVENT) {
+            'release' { $env:RELEASE_TAG }
+            'workflow_dispatch' { $env:INPUT_TAG }
+            default { gh release view --repo $repo --json tagName -q .tagName }
+          }
+          if (-not $tag) { throw 'no release tag' }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          # The zip can land a little after the release is published.
+          for ($i = 1; $i -le 20; $i++) {
+            gh release download $tag --repo $repo --pattern '*-windows-x64.zip' --dir dist --clobber
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -eq 20) { throw "release $tag has no windows-x64 zip" }
+            Start-Sleep -Seconds 30
+          }
+          $zip = Get-ChildItem dist -Filter '*-windows-x64.zip' | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath dist\zip
+          $exe = Get-ChildItem dist\zip -Recurse -Filter rusty-popper.exe | Select-Object -First 1
+          if (-not $exe) { throw 'the zip has no rusty-popper.exe' }
+          foreach ($f in 'libmpv-2.dll', 'rusty-popper.toml') {
+            if (-not (Test-Path (Join-Path $exe.DirectoryName $f))) { throw "the zip has no $f" }
+          }
+          "TAG=$tag" >> $env:GITHUB_ENV
+          "VERSION=$($tag.TrimStart('v'))" >> $env:GITHUB_ENV
+          "PAYLOAD=$($exe.DirectoryName)" >> $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC not found at $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build RustyPopper-Setup.exe
+        shell: pwsh
+        run: |
+          & $env:ISCC "/DAppVersion=$env:VERSION" "/DSourceDir=$env:PAYLOAD" "/DOutputDir=$PWD\dist\out" installer\rusty-popper.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Get-Item dist\out\RustyPopper-Setup.exe | Format-List Name, Length
+
+      - name: Test install, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = "$PWD\dist\out\RustyPopper-Setup.exe"
+          $popper = 'C:\RpTest\PinUPSystem'
+          $app = 'C:\RpTest\RustyPopper'
+          New-Item -ItemType Directory -Force $popper | Out-Null
+          New-Item -ItemType File -Force "$popper\PUPDatabase.db" | Out-Null
+          function Run-Setup($exe, [string[]]$argv, $log) {
+            $p = Start-Process $exe -ArgumentList ($argv + "/LOG=$PWD\dist\$log") -Wait -PassThru
+            if ($p.ExitCode -ne 0) { Get-Content "$PWD\dist\$log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "$exe exited with $($p.ExitCode)" }
+          }
+          function Check($ok, $what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $quiet = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Rusty Popper.lnk'
+
+          # 1. Fresh install: the folder goes beside PinUPSystem, found from /POPPER.
+          Run-Setup $setup ($quiet + "/POPPER=$popper") install1.log
+          foreach ($f in 'rusty-popper.exe', 'libmpv-2.dll', 'rusty-popper.toml', 'Enable-RustyPopperStartup.ps1', 'unins000.exe') {
+            Check (Test-Path "$app\$f") "fresh install has $f"
+          }
+          Check (Select-String -Path "$app\rusty-popper.toml" -SimpleMatch "popper_dir = '$popper'" -Quiet) 'non-default Popper folder saved to the toml'
+          Check (Test-Path $desktop) 'desktop shortcut'
+
+          # 2. Upgrade over it: settings kept, old update leftovers cleared.
+          Add-Content "$app\rusty-popper.toml" '# my own setting'
+          Set-Content "$app\update-pending.json" '{}'
+          New-Item -ItemType Directory -Force "$app\rollback" | Out-Null
+          Set-Content "$app\rusty-popper.exe" 'old'
+          Run-Setup $setup $quiet install2.log
+          Check (Select-String -Path "$app\rusty-popper.toml" -SimpleMatch '# my own setting' -Quiet) 'upgrade keeps rusty-popper.toml'
+          Check ((Get-Item "$app\rusty-popper.exe").Length -gt 1MB) 'upgrade replaces rusty-popper.exe'
+          Check (-not (Test-Path "$app\update-pending.json")) 'upgrade clears update-pending.json'
+          Check (-not (Test-Path "$app\rollback")) 'upgrade clears rollback'
+
+          # 3. Uninstall: program files and shortcut go, settings stay.
+          New-Item -ItemType Directory -Force "$app\cache\logos" | Out-Null
+          Run-Setup "$app\unins000.exe" $quiet uninstall.log
+          for ($i = 0; $i -lt 60 -and (Test-Path "$app\rusty-popper.exe"); $i++) { Start-Sleep -Seconds 1 }
+          Check (-not (Test-Path "$app\rusty-popper.exe")) 'uninstall removes rusty-popper.exe'
+          Check (-not (Test-Path "$app\cache")) 'uninstall removes cache'
+          Check (-not (Test-Path $desktop)) 'uninstall removes the desktop shortcut'
+          Check (Test-Path "$app\rusty-popper.toml") 'uninstall keeps rusty-popper.toml'
+
+      - name: Upload the install logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-logs
+          path: dist/*.log
+          if-no-files-found: ignore
+
+      - name: Keep the installer (pull requests)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustyPopper-Setup
+          path: dist/out/RustyPopper-Setup.exe
+
+      - name: Attach to the release
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          gh release upload $env:TAG dist\out\RustyPopper-Setup.exe --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'upload failed' }
