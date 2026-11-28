@@ -2,6 +2,12 @@
 
 All notable changes to Rusty Popper. Versions follow the GitHub [releases](https://github.com/bca3244/rusty-popper/releases), and each one can be installed from **Exit → Options → Install update** (from v0.2.14 on).
 
+## [0.2.59] - 2026-11-28
+
+### Added
+- A Windows installer, `RustyPopper-Setup.exe`, on each release beside the zip. It finds PinUP Popper the same way the app does (you can change the folder), installs into a `RustyPopper` folder beside `PinUPSystem`, and adds a desktop shortcut, a Start menu entry and an uninstaller. An optional checkbox makes Rusty Popper start at boot instead of Popper.
+- Running a newer setup over an existing install (including one unzipped by hand) upgrades it: Rusty Popper is closed if it's running, the program files are replaced, and `rusty-popper.toml` is kept. The in-app updater works as before.
+
 ## [0.2.58] - 2026-11-26
 
 ### Changed
